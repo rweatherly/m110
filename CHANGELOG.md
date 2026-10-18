@@ -11,6 +11,11 @@ changes a **user** would notice, per release.
 ## [Unreleased]
 
 ### Added
+- **Portable Windows builds for feature testing.** Contributors can create a
+  self-contained ZIP with `packaging\windows\build_portable.ps1`, extract it
+  beside an installed M110, and launch through `run-dev.cmd`. The launcher keeps
+  test settings and data under a separate development root, so branch testing
+  cannot overwrite the installed release's configuration or library.
 - **Your Seestar's dark library comes in with your captures.** Recent Seestar
   firmware keeps its master darks in a `darklibrary` folder next to `MyWorks`.
   Importing from the Seestar now copies them into `Calibration/<your telescope>/darks/`
