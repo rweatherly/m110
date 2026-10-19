@@ -215,6 +215,28 @@ import→reject→re-import round trip for **both** devices in
 
 ---
 
+### 0.5 Portable Windows branch build
+
+Use the portable artifact for each feature-branch acceptance pass, so the test
+covers the frozen application that will actually be handed off rather than the
+editable source environment:
+
+```powershell
+pip install -e ".[build]"
+pip install "uranometria @ git+https://github.com/devonjones/uranometria"
+powershell -ExecutionPolicy Bypass -File packaging\windows\build_portable.ps1
+```
+
+The script produces `dist\M110-portable-<git-sha>.zip`. Extract it and launch
+`run-dev.cmd`; it sets both `USERPROFILE` and `M110_DATA_ROOT` beneath
+`D:\m110-dev`, keeping the installed release's settings and data untouched. To
+use another scratch location, set `M110_DEV_ROOT` before running the launcher.
+Record the ZIP name in the branch handoff so the tested commit is unambiguous.
+
+`-PackageOnly` skips PyInstaller and packages an existing `dist\M110` onedir
+build. It is intended for packaging tests and CI reuse, not as the normal branch
+acceptance command.
+
 ## 1. Automated tests (the gate)
 
 ```bash

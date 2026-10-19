@@ -16,17 +16,19 @@ Produces `dist\M110-<version>-setup.exe` (`<version>` = the full release version
 
 ## Portable ZIP for branch testing
 
-From the repository root, with the project `.venv` installed:
+Install the build dependencies, then run:
 
 ```powershell
-.\packaging\windows\build_portable.ps1
+pip install -e ".[build]"
+pip install "uranometria @ git+https://github.com/devonjones/uranometria"
+powershell -ExecutionPolicy Bypass -File packaging\windows\build_portable.ps1
 ```
 
 This produces `dist\M110-portable-<git-sha>.zip`. Extract it and run
-`run-dev.cmd`; the launcher sets `USERPROFILE` and `M110_DATA_ROOT` below
-`D:\m110-dev` so the portable test does not touch the installed app's settings or
-data. `-PackageOnly -AppDirectory <built dist\M110>` packages an existing build
-without running PyInstaller.
+`run-dev.cmd`; the launcher isolates settings and data under `D:\m110-dev` by
+default. Set `M110_DEV_ROOT` before launching to use another test location.
+`-DevRoot` changes the launcher's default. Pass `-PackageOnly -AppDirectory
+<built-app-path>` to package an existing build without running PyInstaller.
 
 ## Pieces
 

@@ -20,28 +20,46 @@ def test_package_only_creates_isolated_portable_zip(tmp_path: Path) -> None:
     pwsh = shutil.which("pwsh") or shutil.which("powershell")
     assert pwsh is not None
 
-    app = tmp_path / "M110"
+    app = tmp_path / "built-app"
     (app / "_internal").mkdir(parents=True)
     (app / "M110.exe").write_bytes(b"fake executable")
     (app / "_internal" / "marker.txt").write_text("bundled", encoding="utf-8")
     output = tmp_path / "artifacts"
 
+    dev_root = tmp_path / "dev"
     completed = subprocess.run(
-        [pwsh, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
-         "-PackageOnly", "-AppDirectory", str(app), "-OutputDirectory", str(output),
-         "-ArtifactSuffix", "test123", "-DevRoot", str(tmp_path / "dev")],
+        [
+            pwsh,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            "-PackageOnly",
+            "-AppDirectory",
+            str(app),
+            "-OutputDirectory",
+            str(output),
+            "-ArtifactSuffix",
+            "test123",
+            "-DevRoot",
+            str(dev_root),
+        ],
+        cwd=repo,
         capture_output=True,
         text=True,
         check=False,
     )
-    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
     archive = output / "M110-portable-test123.zip"
     assert archive.is_file()
     with zipfile.ZipFile(archive) as package:
-        names = set(package.namelist())
-        assert {"M110/M110.exe", "M110/_internal/marker.txt", "run-dev.cmd"} <= names
+        assert package.read("M110/M110.exe") == b"fake executable"
+        assert package.read("M110/_internal/marker.txt") == b"bundled"
         launcher = package.read("run-dev.cmd").decode("ascii")
-    assert "USERPROFILE" in launcher
-    assert "M110_DATA_ROOT" in launcher
+    assert f'if "%M110_DEV_ROOT%"=="" set "M110_DEV_ROOT={dev_root}"' in launcher
+    assert 'set "USERPROFILE=%M110_DEV_ROOT%\\home"' in launcher
+    assert 'set "M110_DATA_ROOT=%M110_DEV_ROOT%\\data"' in launcher
     assert 'start "" "%~dp0M110\\M110.exe"' in launcher
+    assert (app / "M110.exe").read_bytes() == b"fake executable"

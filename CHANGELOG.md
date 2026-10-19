@@ -22,8 +22,9 @@ changes a **user** would notice, per release.
   When a catalog record has no common name, Origin's system-generated object label
   supplies it without replacing an existing curated name.
 - **Portable Windows test package.** `packaging\windows\build_portable.ps1` creates
-  a ZIP of the onedir app with `run-dev.cmd`, which keeps portable tests under the
-  isolated `D:\m110-dev` settings and data paths.
+  a ZIP of the onedir app with `run-dev.cmd`. The launcher keeps test settings and
+  data under the isolated `D:\m110-dev` root by default, separate from an installed
+  release.
 - **Your Seestar's dark library comes in with your captures.** Recent Seestar
   firmware keeps its master darks in a `darklibrary` folder next to `MyWorks`.
   Importing from the Seestar now copies them into `Calibration/<your telescope>/darks/`

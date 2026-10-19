@@ -1,12 +1,12 @@
 #Requires -Version 5.1
-<#!
+<#
 .SYNOPSIS
 Builds a self-contained M110 ZIP that launches against an isolated data store.
 
 .DESCRIPTION
-Without -PackageOnly this invokes the same PyInstaller spec used by the Windows
-installer, then packages dist\M110.  -PackageOnly packages an already-built app;
-it exists for fast packaging checks and CI-like validation.
+Without -PackageOnly this invokes the Windows PyInstaller spec in a temporary
+build directory, then packages the resulting onedir app. -PackageOnly packages an
+already-built app.
 #>
 [CmdletBinding()]
 param(
@@ -18,43 +18,53 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$oldUserProfile = $env:USERPROFILE
-$oldDataRoot = $env:M110_DATA_ROOT
-$env:USERPROFILE = Join-Path $DevRoot "home"
-$env:M110_DATA_ROOT = Join-Path $DevRoot "data"
-New-Item -ItemType Directory -Force -Path $env:USERPROFILE, $env:M110_DATA_ROOT | Out-Null
-$buildRoot = $null
-
-try {
-    $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-    $python = Join-Path $repo ".venv\Scripts\python.exe"
-
-    if (-not $AppDirectory) {
-        $AppDirectory = Join-Path $repo "dist\M110"
-    }
-    if (-not $OutputDirectory) {
-        $OutputDirectory = Join-Path $repo "dist"
+$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$python = Join-Path $repo ".venv\Scripts\python.exe"
+if (-not $AppDirectory) {
+    $AppDirectory = Join-Path $repo "dist\M110"
+}
+if (-not $OutputDirectory) {
+    $OutputDirectory = Join-Path $repo "dist"
+}
+if (-not $ArtifactSuffix) {
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        $ArtifactSuffix = (& git -C $repo rev-parse --short=7 HEAD 2>$null).Trim()
     }
     if (-not $ArtifactSuffix) {
-        try {
-            $ArtifactSuffix = (& git -C $repo rev-parse --short HEAD).Trim()
-        } catch {
-            $ArtifactSuffix = Get-Date -Format "yyyyMMdd-HHmmss"
-        }
+        $ArtifactSuffix = Get-Date -Format "yyyyMMdd-HHmmss"
     }
+}
+$ArtifactSuffix = $ArtifactSuffix -replace '[^A-Za-z0-9._-]', '-'
+if (-not $ArtifactSuffix) {
+    throw "ArtifactSuffix must contain a filename-safe character."
+}
 
+$buildRoot = $null
+try {
     if (-not $PackageOnly) {
         if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
             throw "Project Python was not found at $python. Create .venv and install .[build] first."
         }
+        & $python -c "import PyInstaller"
+        if ($LASTEXITCODE -ne 0) {
+            throw "PyInstaller was not found. Install .[build] in the project .venv."
+        }
+        & $python -c "import uranometria"
+        if ($LASTEXITCODE -ne 0) {
+            throw "uranometria was not found. Install it in the project .venv before building."
+        }
         & $python (Join-Path $repo "packaging\windows\make_ico.py")
-        if ($LASTEXITCODE -ne 0) { throw "Icon generation failed." }
+        if ($LASTEXITCODE -ne 0) {
+            throw "Icon generation failed."
+        }
         $buildRoot = Join-Path $repo (".portable-build-" + [guid]::NewGuid().ToString("N"))
         $workPath = Join-Path $buildRoot "work"
         $distPath = Join-Path $buildRoot "dist"
         & $python -m PyInstaller (Join-Path $repo "packaging\windows\M110.spec") `
             --noconfirm --clean --workpath $workPath --distpath $distPath
-        if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed." }
+        if ($LASTEXITCODE -ne 0) {
+            throw "PyInstaller failed."
+        }
         $AppDirectory = Join-Path $distPath "M110"
     }
 
@@ -99,6 +109,4 @@ start "" "%~dp0M110\M110.exe"
     if ($buildRoot -and (Test-Path -LiteralPath $buildRoot)) {
         Remove-Item -LiteralPath $buildRoot -Recurse -Force
     }
-    $env:USERPROFILE = $oldUserProfile
-    $env:M110_DATA_ROOT = $oldDataRoot
 }
