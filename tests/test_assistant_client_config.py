@@ -48,7 +48,7 @@ def test_source_install_command_is_runnable():
     assert cmd
     # Either the console-script, or this very interpreter running the module —
     # both of which are guaranteed to have m110 importable.
-    assert cmd[0].endswith("m110-mcp") or cmd[:1] == [sys.executable]
+    assert Path(cmd[0]).stem.casefold() == "m110-mcp" or cmd[:1] == [sys.executable]
 
 
 def test_frozen_build_points_beside_the_gui_binary(tmp_path, monkeypatch):
