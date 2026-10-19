@@ -490,7 +490,7 @@ def retarget(group: IngestGroup, new_object: str) -> IngestGroup:
     new_flag = not config.target_dir(new_object).is_dir()
     new_ops = []
     for op in group.ops:
-        dest = dst_dir / Path(op.src).name
+        dest = dst_dir / Path(op.dest).name
         new_ops.append(replace(op, dest=str(dest),
                                dest_rel=str(dest.relative_to(root)),
                                new_object=new_flag, object=new_object))
@@ -651,7 +651,7 @@ _ORIGIN_DATETIME_RE = re.compile(
     r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})"
 )
 _ORIGIN_TRAILING_DESIGNATION_RE = re.compile(
-    r"(?:^|\s+-\s+)([A-Za-z]+\s*-?\s*\d+)\s*$"
+    r"(?:^|\s+-\s+)([A-Za-z][A-Za-z0-9]*\s*-?\s*\d+)\s*$"
 )
 
 
@@ -713,6 +713,8 @@ def _canonical_origin_target(label: str | None, folder_name: str) -> str | None:
     only its session-folder name.  Preserve a pre-B2 target directory if it
     already exists; this branch intentionally does not migrate prior imports.
     """
+    if any(key.lower() == folder_name.lower() for key in load_aliases()):
+        return canonical_target(folder_name)
     source = _usable_object(label) or _origin_folder_target(folder_name)
     if not source:
         return None
@@ -742,11 +744,13 @@ def _origin_stack_name(filename: str, stamp: str) -> str:
     return f"{stamp}_{filename}"
 
 
-def _is_origin_session_dir(src_dir: Path) -> bool:
+def _is_origin_session_dir(src_dir: Path, should_cancel=None) -> bool:
     """Whether a directory is an Origin session, without loading image pixels."""
     if _origin_info(src_dir) is not None:
         return True
     for filename in _fit_files(src_dir):
+        if should_cancel and should_cancel():
+            raise IngestCancelled()
         info = frame_info(str(src_dir / filename))
         creator = (info or {}).get("creator") or ""
         if creator.lower().startswith("origin"):
@@ -813,7 +817,7 @@ def _classify_origin_dir(src_dir: Path, name: str, action: str,
     return ops
 
 
-def _detect_layout(src_dir: Path, name: str) -> str | None:
+def _detect_layout(src_dir: Path, name: str, should_cancel=None) -> str | None:
     """Which LAYOUTS recognizer claims this directory (or None to skip it)."""
     if name.lower() in _SKIP_DIRS:
         return None
@@ -846,7 +850,7 @@ def _detect_layout(src_dir: Path, name: str) -> str | None:
     # Origin is deliberately after the Dwarf/Seestar fast paths so probing a
     # common ``*_sub`` folder never opens every FITS header just to reject it.
     # It still wins over the generic raw-FITS fallback below.
-    if _is_origin_session_dir(src_dir):
+    if _is_origin_session_dir(src_dir, should_cancel):
         return "origin"
     # Anything else holding loose FITS → sort by header.
     if _fit_files(src_dir):
@@ -1259,7 +1263,7 @@ def _classify_dir(src_dir: Path, name: str, action: str,
     held"). `ctx` is the per-scan memo the recognizers may share."""
     if _in_own_store(src_dir) or name.lower() in _SKIP_DIRS:
         return []
-    layout = _detect_layout(src_dir, name)
+    layout = _detect_layout(src_dir, name, should_cancel)
     handled: set[str] = set()      # files the recognizer claimed (new OR already-present)
     if layout == "m110-store":
         ops = _classify_store_dir(src_dir, name, action, handled)
@@ -1291,6 +1295,9 @@ def _classify_dir(src_dir: Path, name: str, action: str,
     leftover = [f for f in _content_files(src_dir) if f not in handled]
     ops += _emit_unassigned(src_dir, leftover, hold_name or name, action,
                             layout or "unknown")
+    _log.debug("scan: %s → layout=%s content=%d ops=%d held=%d",
+               src_dir, layout, len(_content_files(src_dir)), len(ops),
+               sum(1 for op in ops if op.kind == "unassigned"))
     return ops
 
 
@@ -1387,9 +1394,6 @@ def scan_directory_plan(root, action: str = "copy", should_cancel=None,
         content = len(_content_files(d))
         if content or dir_ops:
             dirs_visited += 1
-            held = sum(1 for o in dir_ops if o.kind == "unassigned")
-            _log.debug("scan: %s → layout=%s content=%d ops=%d held=%d",
-                       d, _detect_layout(d, d.name), content, len(dir_ops), held)
         else:
             dirs_skipped += 1                     # a structural/empty dir (no content)
         ops.extend(dir_ops)

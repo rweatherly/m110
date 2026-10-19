@@ -14,7 +14,7 @@ param(
     [string] $AppDirectory,
     [string] $OutputDirectory,
     [string] $ArtifactSuffix,
-    [string] $DevRoot = "D:\m110-dev"
+    [string] $DevRoot
 )
 
 $ErrorActionPreference = "Stop"
@@ -86,9 +86,10 @@ try {
         Copy-Item -LiteralPath $resolvedApp -Destination (Join-Path $stage "M110") -Recurse
         $launcher = @"
 @echo off
+setlocal
 rem Runs this portable M110 build isolated from any installed M110.
 rem Override the location with: set M110_DEV_ROOT=E:\somewhere
-if "%M110_DEV_ROOT%"=="" set "M110_DEV_ROOT=$DevRoot"
+if "%M110_DEV_ROOT%"=="" set "M110_DEV_ROOT=$(if ($DevRoot) { $DevRoot } else { '%LOCALAPPDATA%\M110-dev' })"
 set "USERPROFILE=%M110_DEV_ROOT%\home"
 set "M110_DATA_ROOT=%M110_DEV_ROOT%\data"
 if not exist "%USERPROFILE%" mkdir "%USERPROFILE%"

@@ -10,6 +10,14 @@ Legend: `[ ]` open · `[~]` partially done
 
 ## Build, CI & dependencies
 
+- [x] **Origin import review fixes (PR #1).** Existing blank Library names are
+  backfilled without replacing curated names; preview remaps retain session
+  stamps; saved source-folder aliases win over automatic labels; `Sh2` labels
+  resolve through the bundled catalog. Layout probing checks Cancel between FITS
+  headers and logging reuses its result. Windows portable launchers default to
+  the recipient's local app-data directory and retain explicit overrides. The
+  current packager already avoids changing the build shell's environment.
+
 - [x] **CI's Python 3.11 leg core-dumped mid-suite (PySide6 6.12.0 leaks `None`)**
   (done — `fix/ci-311-abort`). From 2026-10-14 every `test (3.11)` run died with
   `Aborted (core dumped)` (exit 134) around 76–80%, naming no test; 3.14 passed and

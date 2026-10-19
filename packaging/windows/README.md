@@ -25,8 +25,9 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build_portable.ps1
 ```
 
 This produces `dist\M110-portable-<git-sha>.zip`. Extract it and run
-`run-dev.cmd`; the launcher isolates settings and data under `D:\m110-dev` by
-default. Set `M110_DEV_ROOT` before launching to use another test location.
+`run-dev.cmd`; the launcher isolates settings and data under
+`%LOCALAPPDATA%\M110-dev` on the recipient's machine by default. Set
+`M110_DEV_ROOT` before launching to use another test location.
 `-DevRoot` changes the launcher's default. Pass `-PackageOnly -AppDirectory
 <built-app-path>` to package an existing build without running PyInstaller.
 

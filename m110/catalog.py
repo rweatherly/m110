@@ -813,7 +813,7 @@ def _normalize_designation(text: str) -> str:
 
 
 _ORIGIN_OBJECT_NAME_RE = re.compile(
-    r"^\s*(?P<name>.+?)\s+-\s+(?P<designation>[A-Za-z]+\s*-?\s*\d+)\s*$"
+    r"^\s*(?P<name>.+?)\s+-\s+(?P<designation>[A-Za-z][A-Za-z0-9]*\s*-?\s*\d+)\s*$"
 )
 
 
@@ -879,7 +879,8 @@ def add_captured_objects(resolve_coords: bool = True) -> list[str]:
     A capture **target** is never itself promoted into the object axis — that's the
     Images/ axis, and doing so created a synthetic `m81-m82` pseudo-object that then
     shadowed the folder→slug split (the M81/M82 under-count). Idempotent + additive:
-    never touches an existing entry. Returns the slugs added.
+    fills only missing Origin friendly names on existing entries. Returns only
+    the slugs added, not entries whose names were backfilled.
     """
     from . import scan_sessions  # local import: avoids any import cycle
     path = config.LIBRARY_TOML
@@ -890,6 +891,7 @@ def add_captured_objects(resolve_coords: bool = True) -> list[str]:
     known = set(cat) | set(ref)      # the object universe a folder may resolve into
 
     new: dict[str, dict] = {}
+    names_changed = False
     for d in sorted(p for p in config.IMAGES_DIR.iterdir() if p.is_dir()):
         if not ((d / "lights").is_dir() or (d / "seestar-stacks").is_dir()):
             continue                                  # not a capture target
@@ -899,7 +901,15 @@ def add_captured_objects(resolve_coords: bool = True) -> list[str]:
             # Known catalog object(s) — ensure each is in the Library, with its
             # full reference metadata. A combined folder promotes every member.
             for m in members:
-                if m in cat or m in new or m not in ref:
+                if m in cat:
+                    entry = cat[m]
+                    if _is_missing("name", entry.get("name")):
+                        friendly_name = _origin_friendly_name(d, entry.get("id", m))
+                        if friendly_name:
+                            entry["name"] = friendly_name
+                            names_changed = True
+                    continue
+                if m in new or m not in ref:
                     continue
                 entry = dict(ref[m])
                 entry.setdefault("id", m.upper())
@@ -926,6 +936,8 @@ def add_captured_objects(resolve_coords: bool = True) -> list[str]:
                 entry["ra_deg"], entry["dec_deg"] = rd
         new[slug] = entry
 
+    if names_changed:
+        _write_library(cat)
     if new:
         _append_library_entries(new)
     return list(new)

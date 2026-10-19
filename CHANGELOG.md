@@ -23,8 +23,8 @@ changes a **user** would notice, per release.
   supplies it without replacing an existing curated name.
 - **Portable Windows test package.** `packaging\windows\build_portable.ps1` creates
   a ZIP of the onedir app with `run-dev.cmd`. The launcher keeps test settings and
-  data under the isolated `D:\m110-dev` root by default, separate from an installed
-  release.
+  data under `%LOCALAPPDATA%\M110-dev` on the machine running it by default,
+  separate from an installed release; explicit scratch-root overrides still work.
 - **Your Seestar's dark library comes in with your captures.** Recent Seestar
   firmware keeps its master darks in a `darklibrary` folder next to `MyWorks`.
   Importing from the Seestar now copies them into `Calibration/<your telescope>/darks/`
@@ -63,6 +63,12 @@ changes a **user** would notice, per release.
   given one telescope's masters.
 
 ### Fixed
+- Origin preview remaps preserve session filenames and remembered target choices,
+  so importing again does not add extra copies. Labels such as
+  `Cave Nebula - Sh2-155` resolve to their catalog entry, and refresh fills missing
+  Origin names on existing Library entries while preserving curated names.
+- Cancelling a loose-FITS scan now interrupts Origin detection between header
+  reads; scan logging no longer repeats the detection pass.
 - **Calibration frames now reach every Siril job on a mixed-filter object.** They
   were linked once at the top of the processing folder, but the Naztronomy script
   looks for `darks/` next to the `lights/` it is run on, which for an object shot
