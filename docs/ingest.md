@@ -40,6 +40,28 @@ friendly part of Origin's system-generated `StackedInfo.objectName` (for example
 `Pacman Nebula`) to fill the Library Name column; it never replaces a curated name.
 Reimporting the same session offers no new files.
 
+Session calibration is compared by SHA-256 within each target and calibration
+tier. Two sessions using identical dark, flat, or bias bytes share the first
+stored copy; distinct bytes are kept even when a session is exported again with
+the same filename. All sessions' lights and original JSON sidecars are retained.
+Existing copies are never removed. Processing prep continues to enumerate the
+target's calibration tiers.
+
+An Origin export's root `Calibration/` directory imports into
+`Calibration/<telescope>/{darks,flats,biases}/`. The telescope comes from a master's
+`TELESCOP`, or from an unambiguous Origin light/camera identity among sibling
+sessions. Unidentified or ambiguous masters go to the holding area; an empty
+`Calibration/` adds nothing. Paired master JSON is preserved beside the master,
+including when the JSON arrives on a later import.
+
+For library-only preparation, Origin matching requires known binning and matching
+GAIN or ISO; ISO is kept separate from GAIN. Missing settings do not count as a
+match. A stored light's ISO can come from its own session's `info.json`, and a
+master's from its paired JSON. Masters lacking this evidence remain archived but
+are not selected automatically. Target-local calibration still takes precedence.
+Origin filter grouping and the supported Siril preset are separate follow-ups;
+these import/preparation checks do not establish end-to-end Origin stacking.
+
 ### The Seestar's dark library
 
 Recent Seestar firmware keeps its master darks in a `darklibrary/` folder beside

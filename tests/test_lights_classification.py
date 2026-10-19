@@ -14,6 +14,8 @@ already-mis-filed products out of `lights/`.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from m110 import config, ingest, siril
 from ._helpers import seed_root
 
@@ -62,7 +64,7 @@ def test_prep_lights_excludes_products(tmp_path, monkeypatch):
     assert plan.filters == ["IRCUT", "LP"]
     assert "OTHER" not in plan.filters
     linked = {name for j in plan.jobs for _, dst in j.links
-              for name in [dst.rsplit("/", 1)[-1]]}
+              for name in [Path(dst).name]}
     assert not (linked & set(PRODUCTS))
 
 
@@ -78,12 +80,12 @@ def test_emit_files_routes_products_to_working(tmp_path, monkeypatch):
                              "M27", "copy", "raw-fits")
     by_kind: dict[str, set[str]] = {}
     for op in ops:
-        by_kind.setdefault(op.kind, set()).add(op.dest.rsplit("/", 1)[-1])
+        by_kind.setdefault(op.kind, set()).add(Path(op.dest).name)
     assert by_kind["light"] == set(SUBS)
     assert by_kind["working"] == set(PRODUCTS)
     # Destinations land in the right tiers.
     for op in ops:
-        parent = op.dest.rsplit("/", 2)[-2]
+        parent = Path(op.dest).parent.name
         assert parent == ("lights" if op.kind == "light" else "working_files")
 
 
@@ -94,7 +96,7 @@ def test_plan_lights_cleanup(tmp_path, monkeypatch):
     _seed_lights(root, "M27", SUBS + PRODUCTS)
     _seed_lights(root, "M13", SUBS)                 # clean target — untouched
     ops = ingest.plan_lights_cleanup()
-    assert {op.dest.rsplit("/", 1)[-1] for op in ops} == set(PRODUCTS)
+    assert {Path(op.dest).name for op in ops} == set(PRODUCTS)
     assert all(op.action == "move" and op.kind == "working" for op in ops)
     assert all(op.object == "M27" for op in ops)    # M13 produced nothing
 

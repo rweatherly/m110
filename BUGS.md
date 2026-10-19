@@ -10,6 +10,19 @@ Legend: `[ ]` open · `[~]` partially done
 
 ## Build, CI & dependencies
 
+- [x] **Windows regression suite portability.** Relative ingest/image-manifest
+  paths use forward slashes consistently; tests treat native absolute paths and
+  file URLs as paths. The backup hash cache preserves Windows file IDs wider
+  than SQLite's signed 64-bit range without losing identity bits. Mangled S3
+  addresses with Windows separators are rejected. Fixture stores now isolate
+  `INTERNAL_DIR`, preventing remembered import aliases leaking between tests.
+
+- [x] **Origin repeated session calibration (B3/B4).** Identical masters are
+  deduplicated by content within a target/tier; re-exported same-name distinct
+  masters are retained. Root Calibration masters use the existing device library,
+  with conservative device attribution and explicit ISO/binning matching.
+  Missing metadata never becomes a compatibility claim.
+
 - [x] **Origin import review fixes (PR #1).** Existing blank Library names are
   backfilled without replacing curated names; preview remaps retain session
   stamps; saved source-folder aliases win over automatic labels; `Sh2` labels

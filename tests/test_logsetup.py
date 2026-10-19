@@ -27,7 +27,7 @@ def test_setup_creates_log_and_writes(isolated_logging):
     logsetup.get_logger().info("hello-marker")
     for h in logging.getLogger("m110").handlers:
         h.flush()
-    assert "hello-marker" in path.read_text()
+    assert "hello-marker" in path.read_text(encoding="utf-8")
 
 
 def test_setup_is_idempotent(isolated_logging):
@@ -63,7 +63,7 @@ def test_startup_logs_the_data_root_and_where_it_came_from(isolated_logging):
     path = logsetup.setup_logging()
     for h in logging.getLogger("m110").handlers:
         h.flush()
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     assert f"data root: {config.DATA_ROOT} — from {config.data_root_source()}" in text
 
 

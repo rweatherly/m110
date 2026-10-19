@@ -9,6 +9,7 @@ Two halves, tested separately because they fail in different ways:
     sub is never copied back in (which is the whole reason to move rather than delete).
 """
 from datetime import datetime
+from pathlib import Path
 
 from m110 import config, ingest, processing, scan_sessions, siril
 
@@ -67,7 +68,7 @@ def test_prep_does_not_link_a_rejected_sub(tmp_path, monkeypatch):
     plan = siril.plan_prep("M101")
     assert plan.total_lights == 2
     linked = {name for job in plan.jobs for (_src, dst) in job.links
-              for name in [dst.rsplit("/", 1)[-1]]}
+              for name in [Path(dst).name]}
     assert linked == set(names[1:])
 
 

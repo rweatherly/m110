@@ -178,7 +178,7 @@ def _summary(text: str) -> str:
 def _git_show(tag: str, path: str) -> str | None:
     try:
         return subprocess.run(["git", "show", f"{tag}:{path}"], cwd=ROOT,
-                              capture_output=True, text=True,
+                              capture_output=True, text=True, encoding="utf-8",
                               check=True).stdout
     except subprocess.CalledProcessError:
         return None
@@ -194,7 +194,7 @@ def sources_at_tag(tag: str) -> list[tuple[str, Path, str]]:
     """
     listing = subprocess.run(
         ["git", "ls-tree", "-r", "--name-only", tag, "docs/"],
-        cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=True).stdout.split()
     names = [n for n in listing if n.endswith(".md")]
     readme = "docs/README.md"
     order = [readme] if readme in names else []

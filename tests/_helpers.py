@@ -14,6 +14,7 @@ def seed_root(tmp_path, monkeypatch):
     root = tmp_path / "M110"
     internal = root / config.INTERNAL_DIRNAME
     monkeypatch.setattr(config, "DATA_ROOT", root)
+    monkeypatch.setattr(config, "INTERNAL_DIR", internal)
     monkeypatch.setattr(config, "LIBRARY_TOML", internal / "library.toml")
     monkeypatch.setattr(config, "IMAGES_DIR", root / "Images")
     monkeypatch.setattr(config, "OBJECTS_DIR", root / "Objects")
@@ -45,7 +46,7 @@ def add_library(root, entries):
     """Append minimal `[catalog.<slug>]` blocks to the (empty) Library so a test
     can populate the collection directly (5d: the Library no longer bulk-seeds)."""
     lib = root / config.INTERNAL_DIRNAME / "library.toml"
-    with lib.open("a") as f:
+    with lib.open("a", encoding="utf-8") as f:
         for slug, e in entries.items():
             f.write(f"\n[catalog.{slug}]\n")
             for k, v in e.items():

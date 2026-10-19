@@ -248,6 +248,36 @@ header reads on Cancel and must not repeat header reads just for debug logging.
 
 ## 1. Automated tests (the gate)
 
+Origin B3/B4 fixture coverage lives in `tests/test_ingest_origin.py` and
+`tests/test_calibration.py`: combined/separate-session imports, stale previews,
+same-name changed calibration, cancellation, target scoping, shared-library
+routing, missing/ambiguous devices, late JSON, missing settings and mixed ISO.
+The packager's real `-PackageOnly`/recipient launcher tests remain in
+`tests/test_build_portable_windows.py`.
+
+Opt-in real-sample gates copy the named Origin and Seestar samples before import:
+
+```powershell
+$env:M110_SAMPLE_ROOT = 'C:\Users\rweat\OneDrive\Documents\GitHub\AIProjects\Astrophotography'
+.venv\Scripts\python.exe -X utf8 -m pytest -q tests/test_origin_acceptance.py
+```
+
+They verify source hashes, two Origin sessions sharing calibration, a library-only
+dark match using the real JSON ISO, and the Seestar plan against accepted commit
+`81c68a1`. The real bias/flat lack ISO/GAIN evidence and must remain unmatched.
+No actual Siril stacking is claimed by this gate.
+
+Manual B3/B4 gate: extract the branch's portable ZIP, set
+`M110_DEV_ROOT=D:\m110-dev\review-b3-b4`, and launch its `run-dev.cmd`. Browse two
+copied same-target Origin sessions; confirm both light sets, one copy of each
+identical master per target/tier, retained session JSON, and zero new operations
+on reimport. Change a copied dark's bytes and confirm it is retained separately.
+In another fresh isolated store browse a copied root whose calibration FITS/JSON
+have been moved from its session into `Calibration/`; confirm the shared library
+paths and preparation notes. Check absent/empty Calibration and an ambiguous-device
+control. Keep originals untouched. Rob's manual acceptance remains separate from
+the automated gates and frozen-launch smoke test.
+
 ```bash
 cd ~/Documents/Code/m110
 source .venv/bin/activate

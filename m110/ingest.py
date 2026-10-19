@@ -90,6 +90,7 @@ LAYOUTS = [
     Layout("seestar",         "Seestar",         True),   # folder-name conventions (_sub/Stacked_/_photo)
     Layout("dwarf",           "DwarfLab Dwarf",  True),    # DWARF_RAW_*/STARTRAILS_* session folders
     Layout("origin",          "Celestron Origin", True),   # timestamped on-device session folders
+    Layout("origin-calibration", "Origin calibration library", True), # root Calibration/ masters
     Layout("m110-store",      "M110 store",      True),    # FITS/<obj>/{lights,darks,…}, Finished Images/, Seestar_stacks/
     Layout("calibration",     "Calibration masters", True), # a store's Calibration/<device>/<tier>/
     Layout("seestar-darks",   "Seestar dark library", True), # <volume>/darklibrary/<exp>s/MasterDark_*
@@ -399,6 +400,7 @@ def frame_info(path: str) -> dict | None:
         "ra_deg": ra_deg,
         "dec_deg": dec_deg,
         "telescop": str(tel).strip() if tel not in (None, "") else None,
+        "camera": (str(hdr.get("CAMERA")).strip() or None) if hdr.get("CAMERA") else None,
         "creator": (str(hdr.get("CREATOR")).strip() or None)
                    if hdr.get("CREATOR") else None,
     }
@@ -492,9 +494,9 @@ def retarget(group: IngestGroup, new_object: str) -> IngestGroup:
     for op in group.ops:
         dest = dst_dir / Path(op.dest).name
         new_ops.append(replace(op, dest=str(dest),
-                               dest_rel=str(dest.relative_to(root)),
+                               dest_rel=dest.relative_to(root).as_posix(),
                                new_object=new_flag, object=new_object))
-    return replace(group, object=new_object, dest_dir=str(dst_dir.relative_to(root)),
+    return replace(group, object=new_object, dest_dir=dst_dir.relative_to(root).as_posix(),
                    new_object=new_flag, ops=new_ops, pointing=None, suggested=None)
 
 
@@ -639,7 +641,7 @@ def _emit_one_kind(src_dir: Path, files, kind: str, obj: str, group: str,
             continue
         dest = dst_dir / destination_name
         ops.append(IngestOp(str(src_dir / f), str(dest), kind, group,
-                            str(dest.relative_to(root)), new_object, action,
+                            dest.relative_to(root).as_posix(), new_object, action,
                             _size(src_dir / f), layout, obj))
     return ops
 
@@ -758,13 +760,52 @@ def _is_origin_session_dir(src_dir: Path, should_cancel=None) -> bool:
     return False
 
 
+def _calibration_content(dst_dir: Path, ctx: dict, should_cancel=None) -> tuple[dict, set]:
+    """Per-scan hashes and reserved names for one calibration tier; no pixel reads."""
+    cache = ctx.setdefault("calibration_content", {})
+    if dst_dir not in cache:
+        files = _all_files(dst_dir)
+        hashes = {_digest(str(dst_dir / f), should_cancel): dst_dir / f
+                  for f in files if config.is_fits_file(f)}
+        cache[dst_dir] = (hashes, set(files))
+    return cache[dst_dir]
+
+
+def _emit_origin_calibration(src_dir: Path, files, kind: str, obj: str,
+                             group: str, stamp: str | None, ctx: dict,
+                             should_cancel=None, layout="origin") -> list[IngestOp]:
+    """Keep one copy per target/tier and content, even across pending sessions."""
+    dst_dir = _KIND_DIR[kind](obj)
+    hashes, names = _calibration_content(dst_dir, ctx, should_cancel)
+    ops: list[IngestOp] = []
+    for filename in files:
+        src = src_dir / filename
+        digest = _digest(str(src), should_cancel)
+        if digest in hashes:
+            continue
+        name = _origin_stamped_name(filename, stamp) if stamp else filename
+        original = Path(name)
+        n = 1
+        while name in names:
+            name = f"{original.stem}_{n}{original.suffix}"
+            n += 1
+        dest = dst_dir / name
+        ops.append(IngestOp(str(src), str(dest), kind, group,
+                            dest.relative_to(config.DATA_ROOT).as_posix(),
+                            kind not in _CAL_KINDS and not config.target_dir(obj).is_dir(),
+                            "copy", _size(src), layout, obj))
+        hashes[digest] = dest
+        names.add(name)
+    return ops
+
+
 def _classify_origin_dir(src_dir: Path, name: str, action: str,
-                         handled: set, should_cancel=None) -> list[IngestOp]:
+                         handled: set, should_cancel=None, ctx=None) -> list[IngestOp]:
     """Import an Origin session without conflating its restarted frame counters.
 
     Origin names every session's frames ``Light0001.fits`` and keeps calibration
-    frames beside them.  The session time is therefore part of every destination
-    filename.  B2 resolves its JSON/FITS/folder target label to a catalog target.
+    frames beside them. Lights keep the session time; calibration is stored once
+    per target/tier and content. JSON/FITS/folder labels resolve to a catalog target.
     """
     info_json = _origin_info(src_dir)
     stamp = _origin_stamp(name, info_json)
@@ -801,8 +842,12 @@ def _classify_origin_dir(src_dir: Path, name: str, action: str,
         buckets.setdefault(kind, []).append(filename)
     for kind, files in buckets.items():
         handled.update(files)
-        ops += _emit_files(src_dir, files, kind, obj, name, action, "origin",
-                           lambda filename: _origin_stamped_name(filename, stamp))
+        if kind in ("dark", "flat", "bias"):
+            ops += _emit_origin_calibration(src_dir, files, kind, obj, name, stamp,
+                                            ctx if ctx is not None else {}, should_cancel)
+        else:
+            ops += _emit_files(src_dir, files, kind, obj, name, action, "origin",
+                               lambda filename: _origin_stamped_name(filename, stamp))
 
     all_files = _all_files(src_dir)
     stacks = [f for f in all_files
@@ -828,6 +873,8 @@ def _detect_layout(src_dir: Path, name: str, should_cancel=None) -> str | None:
         return "calibration"
     if _is_seestar_darklib_dir(src_dir, name):
         return "seestar-darks"
+    if name.lower() == "calibration" and _is_origin_session_dir(src_dir, should_cancel):
+        return "origin-calibration"
     # M110-store-shaped (precursor like ~/Astronomy/Images): a known content
     # subdir under an <object>, or an <object> under a known container.
     if name.lower() in _STORE_SUBDIR_KIND or src_dir.parent.name.lower() in _STORE_PARENT_KIND:
@@ -967,7 +1014,7 @@ def _classify_seestar_dir(src_dir: Path, name: str, action: str,
                 continue
             dest = dst_dir / f
             ops.append(IngestOp(str(src_dir / f), str(dest), "media", name,
-                                str(dest.relative_to(root)), False, action,
+                                dest.relative_to(root).as_posix(), False, action,
                                 _size(src_dir / f), "seestar", name))
         return ops
 
@@ -1021,7 +1068,7 @@ def _emit_media(src_dir: Path, files, category_dir: str, obj_label: str,
             continue
         dest = dst_dir / f
         ops.append(IngestOp(str(src_dir / f), str(dest), "media", category_dir,
-                            str(dest.relative_to(root)), False, action,
+                            dest.relative_to(root).as_posix(), False, action,
                             _size(src_dir / f), layout, obj_label))
     return ops
 
@@ -1102,6 +1149,63 @@ def _classify_dwarf_dir(src_dir: Path, name: str, action: str,
 
 
 # ── device-level calibration masters (Calibration/<device>/<tier>) ─────────────
+def _origin_root_device(root: Path, ctx: dict, should_cancel=None) -> str | None:
+    """Only an unambiguous sibling light header may identify unlabelled masters."""
+    cache = ctx.setdefault("origin_root_device", {})
+    if root not in cache:
+        identities: set[tuple] = set()
+        for folder in sorted(root.iterdir()):
+            if not folder.is_dir() or config.is_hidden_name(folder.name):
+                continue
+            for name in _fit_files(folder):
+                if should_cancel and should_cancel():
+                    raise IngestCancelled()
+                facts = frame_info(str(folder / name)) or {}
+                if (facts.get("creator") or "").lower().startswith("origin") and \
+                        facts.get("imagetyp") == "light" and facts.get("telescop"):
+                    identities.add((devices.folder_name(facts["telescop"]), facts.get("camera")))
+        cache[root] = next(iter(identities))[0] if len(identities) == 1 else None
+    return cache[root]
+
+
+def _classify_origin_calibration(src_dir: Path, handled: set, ctx: dict,
+                                  should_cancel=None) -> list[IngestOp]:
+    """Origin's root masters use the existing device library, never DARK targets."""
+    ops: list[IngestOp] = []
+    for filename in _fit_files(src_dir):
+        if should_cancel and should_cancel():
+            raise IngestCancelled()
+        facts = frame_info(str(src_dir / filename)) or {}
+        kind = facts.get("imagetyp")
+        if kind not in ("dark", "flat", "bias"):
+            continue
+        if not (facts.get("creator") or "").lower().startswith("origin"):
+            continue
+        device = (devices.folder_name(facts["telescop"]) if facts.get("telescop")
+                  else _origin_root_device(src_dir.parent, ctx, should_cancel))
+        if not device:
+            continue                 # unknown/ambiguous attribution → holding area
+        handled.add(filename)
+        emitted = _emit_origin_calibration(
+            src_dir, [filename], f"cal-{kind}", _safe_segment(device),
+            f"{device} calibration masters", None, ctx, should_cancel,
+            layout="origin-calibration")
+        ops += emitted
+        sidecar = (src_dir / filename).with_suffix(".json")
+        if sidecar.is_file():
+            handled.add(sidecar.name)
+            dst_dir = _KIND_DIR[f"cal-{kind}"](_safe_segment(device))
+            hashes, _names = _calibration_content(dst_dir, ctx, should_cancel)
+            master = hashes[_digest(str(src_dir / filename), should_cancel)]
+            dest = master.with_suffix(".json")
+            if not dest.exists() and not any(op.dest == str(dest) for op in ops):
+                ops.append(IngestOp(
+                    str(sidecar), str(dest), f"cal-{kind}", f"{device} calibration masters",
+                    dest.relative_to(config.DATA_ROOT).as_posix(), False, "copy",
+                    _size(sidecar), "origin-calibration", _safe_segment(device)))
+    return ops
+
+
 def _is_store_calibration_dir(src_dir: Path, name: str) -> bool:
     """``Calibration/<device>/<darks|flats|biases>/`` holding FITS — another M110
     store's (a backup, a second machine) device library, imported as itself."""
@@ -1238,7 +1342,7 @@ def _emit_unassigned(src_dir: Path, files, name: str, action: str,
             continue
         dest = dst_dir / f
         ops.append(IngestOp(str(src_dir / f), str(dest), "unassigned", name,
-                            str(dest.relative_to(root)), False, action,
+                            dest.relative_to(root).as_posix(), False, action,
                             _size(src_dir / f), layout, ""))
     return ops
 
@@ -1269,12 +1373,15 @@ def _classify_dir(src_dir: Path, name: str, action: str,
         ops = _classify_store_dir(src_dir, name, action, handled)
     elif layout == "calibration":
         ops = _classify_calibration_dir(src_dir, name, action, handled)
+    elif layout == "origin-calibration":
+        ops = _classify_origin_calibration(src_dir, handled,
+                                           ctx if ctx is not None else {}, should_cancel)
     elif layout == "seestar-darks":
         ops = _classify_seestar_darks_dir(src_dir, name, action, handled, ctx)
     elif layout == "dwarf":
         ops = _classify_dwarf_dir(src_dir, name, action, handled, should_cancel)
     elif layout == "origin":
-        ops = _classify_origin_dir(src_dir, name, action, handled, should_cancel)
+        ops = _classify_origin_dir(src_dir, name, action, handled, should_cancel, ctx)
     elif layout == "seestar":
         ops = _classify_seestar_dir(src_dir, name, action, handled, should_cancel)
     elif layout == "raw-fits":
@@ -1502,7 +1609,7 @@ def group_ops(ops: list[IngestOp]) -> list[IngestGroup]:
     groups: list[IngestGroup] = []
     for (_key, kind), gops in by_group.items():
         # destination dir = parent of the first op's destination
-        dest_dir = str(Path(gops[0].dest_rel).parent)
+        dest_dir = Path(gops[0].dest_rel).parent.as_posix()
         groups.append(IngestGroup(
             group=gops[0].group,        # display label = source folder name (not the key)
             object=_object_label(gops[0]),
@@ -1589,7 +1696,7 @@ def scan_holding(should_cancel=None) -> list[IngestOp]:
                         obj = cat.get(slug, {}).get("id") \
                             or ref.get(slug, {}).get("id") or slug
             ops.append(IngestOp(str(src), str(src), "unassigned", group,
-                                str(src.relative_to(root)), False, "move",
+                                src.relative_to(root).as_posix(), False, "move",
                                 _size(src), "holding", obj))
     return ops
 
@@ -1757,19 +1864,20 @@ def assign(group: IngestGroup, object: str, kind: str) -> IngestGroup:
         dest = dst_dir / Path(op.src).name
         new_ops.append(replace(op, dest=str(dest), kind=kind, object=obj,
                                action="move", new_object=new_flag,
-                               dest_rel=str(dest.relative_to(root))))
+                               dest_rel=dest.relative_to(root).as_posix()))
     return replace(group, object=obj, kind=kind,
-                   dest_dir=str(dst_dir.relative_to(root)),
+                   dest_dir=dst_dir.relative_to(root).as_posix(),
                    new_object=new_flag, ops=new_ops)
 
 
-def _digest(path: str) -> str:
-    """SHA-256 of a file's bytes (streamed; cheap enough — only run on a name
-    collision, not on every op)."""
+def _digest(path: str, should_cancel=None) -> str:
+    """Stream SHA-256 for collisions and calibration dedup; remain cancellable."""
     import hashlib
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
+            if should_cancel and should_cancel():
+                raise IngestCancelled()
             h.update(chunk)
     return h.hexdigest()
 
@@ -1815,6 +1923,7 @@ def apply_ops(ops: list[IngestOp], progress=None, should_cancel=None) -> dict:
     # Catches every path-traversal vector at once — folder name, FITS OBJECT header,
     # alias, retarget — regardless of how the op was built (SECURITY_ASSESSMENT.md F1).
     root = config.DATA_ROOT.resolve()
+    ctx: dict = {}
     for op in ops:
         try:
             Path(op.dest).resolve().relative_to(root)
@@ -1826,6 +1935,22 @@ def apply_ops(ops: list[IngestOp], progress=None, should_cancel=None) -> dict:
         if should_cancel and should_cancel():
             cancelled = True
             break
+        digest = None
+        if (op.layout in ("origin", "origin-calibration")
+                and op.kind in ("dark", "flat", "bias", "cal-dark", "cal-flat", "cal-bias")
+                and config.is_fits_file(op.src)):
+            try:
+                hashes, _names = _calibration_content(Path(op.dest).parent, ctx,
+                                                       should_cancel)
+                digest = _digest(op.src, should_cancel)
+            except IngestCancelled:
+                cancelled = True
+                break
+            if digest in hashes:
+                skipped += 1
+                if progress:
+                    progress(i, total)
+                continue
         os.makedirs(os.path.dirname(op.dest), exist_ok=True)
         if os.path.exists(op.dest) and _same_content(op.src, op.dest):
             skipped += 1                    # identical bytes already present
@@ -1851,6 +1976,8 @@ def apply_ops(ops: list[IngestOp], progress=None, should_cancel=None) -> dict:
             else:
                 shutil.move(op.src, dest)
             moved += 1
+            if digest is not None:
+                hashes[digest] = Path(dest)
         if progress:
             progress(i, total)
     return {"moved": moved, "skipped": skipped, "cancelled": cancelled}
@@ -1885,7 +2012,7 @@ def plan_lights_cleanup(targets: list[str] | None = None) -> list[IngestOp]:
                 continue                        # genuine sub — leave it
             dest = config.working_files_dir(name) / f.name
             ops.append(IngestOp(str(f), str(dest), "working", name,
-                                str(dest.relative_to(root)), action="move",
+                                dest.relative_to(root).as_posix(), action="move",
                                 size_bytes=_size(f), layout="cleanup",
                                 object=name))
     return ops

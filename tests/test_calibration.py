@@ -82,6 +82,71 @@ def test_frame_facts_falls_back_to_det_temp_and_exposure(tmp_path):
     assert calibration.frame_facts(tmp_path / "missing.fits") is None
 
 
+@pytest.mark.parametrize("iso,binning", [(None, 1), (200, None), (200, 0)])
+def test_origin_missing_settings_do_not_match_each_other(tmp_path, monkeypatch, iso, binning):
+    """Two absent gain/binning values cannot establish Origin master compatibility."""
+    seed_root(tmp_path, monkeypatch)
+    cards = {"CREATOR": "Origin 1.5.6240", "EXPTIME": 15.0, "FILTER": "Nebula"}
+    if iso is not None:
+        cards["ISO"] = iso
+    if binning is not None:
+        cards["XBINNING"] = binning
+    for tier, kind in (("darks", "DARK"), ("flats", "FLAT"), ("biases", "BIAS")):
+        _master(config.calibration_dir("RASA6F2", tier) / "master.fits", kind, **cards)
+    facts = dict(calibration.frame_facts(config.calibration_dir("RASA6F2", "darks") / "master.fits"))
+    result = calibration.match_masters(facts, "RASA6F2")
+    assert not result
+    assert any("ISO" in note or "binning" in note for note in result.notes)
+
+
+def test_origin_iso_is_distinct_from_gain_and_mixed_iso_is_refused(tmp_path, monkeypatch):
+    seed_root(tmp_path, monkeypatch)
+    path = _master(config.calibration_dir("RASA6F2", "darks") / "dark.fits", "DARK",
+                   CREATOR="Origin 1.5.6240", EXPTIME=15.0, ISO=200, XBINNING=1)
+    facts = calibration.frame_facts(path)
+    assert facts["gain"] is None
+    assert facts["iso"] == 200
+    assert calibration.match_masters(facts, "RASA6F2").darks == path
+    assert calibration.match_masters(dict(facts, iso=400), "RASA6F2").darks is None
+    combined = calibration.facts_from_frames([
+        dict(facts, telescop="RASA6F2"), dict(facts, iso=400, telescop="RASA6F2")])
+    assert combined["mixed"]
+    assert not calibration.match_for_facts(combined, "RASA6F2")
+
+
+def test_origin_session_json_and_master_sidecar_supply_iso(tmp_path, monkeypatch):
+    """Real Origin headers omit GAIN/ISO; use only the correctly paired JSON."""
+    import json
+    seed_root(tmp_path, monkeypatch)
+    light = _master(config.lights_dir("M31") / "Light0001_20260926-210108.fits", "LIGHT",
+                    CREATOR="Origin 1.5.6240", EXPTIME=15.0,
+                    TELESCOP="RASA6F2")
+    info = config.seestar_stacks_dir("M31")
+    info.mkdir(parents=True)
+    (info / "20260926-210108_info.json").write_text(json.dumps({
+        "StackedInfo": {"captureParams": {"iso": 200, "binning": 1}}}))
+    dark = _master(config.calibration_dir("RASA6F2", "darks") / "dark0007.fits", "DARK",
+                   CREATOR="Origin 1.5.6240", EXPTIME=15.0, XBINNING=1)
+    dark.with_suffix(".json").write_text(json.dumps({"iso": 200}))
+    assert calibration.frame_facts(light)["iso"] == 200
+    assert calibration.match_for_target("M31").darks == dark
+    dark.with_suffix(".json").write_text("not JSON")
+    assert calibration.match_for_target("M31").darks is None
+    (info / "20260926-210108_info.json").write_text("[]")
+    assert calibration.frame_facts(light)["iso"] is None
+
+
+def test_origin_library_refuses_lights_without_origin_setting_evidence(tmp_path, monkeypatch):
+    """Callers without Origin facts must not fall through to None == None matching."""
+    seed_root(tmp_path, monkeypatch)
+    _master(config.calibration_dir("RASA6F2", "darks") / "dark.fits", "DARK",
+            CREATOR="Origin 1.5.6240", EXPTIME=15.0, ISO=200, XBINNING=1)
+    facts = {"exptime": 15.0, "gain": None, "binning": 1}
+    result = calibration.match_masters(facts, "RASA6F2")
+    assert not result
+    assert any("Origin" in note for note in result.notes)
+
+
 # ── dark matching ─────────────────────────────────────────────────────────────
 
 def test_dark_exact_settings_then_nearest_temperature(tmp_path, monkeypatch):

@@ -56,6 +56,15 @@ def cache_path() -> Path:
     return config.APP_CONFIG_DIR / CACHE_FILENAME
 
 
+def _file_id(value: int) -> int | str:
+    """Keep wide Windows file IDs lossless within SQLite's INTEGER affinity.
+
+    The prefix prevents SQLite converting an oversized decimal string to REAL.
+    Existing signed 64-bit keys keep their representation (and cache hits).
+    """
+    return value if -(1 << 63) <= value < (1 << 63) else f"id:{value}"
+
+
 class HashCache:
     """Degrades to plain hashing if sqlite is unavailable (read-only home, a
     corrupt file, a filesystem without locking) — slower, never wrong."""
@@ -102,7 +111,8 @@ class HashCache:
             row = self._conn.execute(
                 "SELECT sha256 FROM hashes WHERE path=? AND size=? AND mtime_ns=? "
                 "AND inode=? AND dev=?",
-                (key, st.st_size, st.st_mtime_ns, st.st_ino, st.st_dev)).fetchone()
+                (key, st.st_size, st.st_mtime_ns,
+                 _file_id(st.st_ino), _file_id(st.st_dev))).fetchone()
         except sqlite3.Error:
             return None
         if row is None:
@@ -119,7 +129,8 @@ class HashCache:
                 "VALUES(?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET "
                 "size=excluded.size, mtime_ns=excluded.mtime_ns, inode=excluded.inode, "
                 "dev=excluded.dev, sha256=excluded.sha256, seen=excluded.seen",
-                (str(path), st.st_size, st.st_mtime_ns, st.st_ino, st.st_dev, sha,
+                (str(path), st.st_size, st.st_mtime_ns,
+                 _file_id(st.st_ino), _file_id(st.st_dev), sha,
                  int(time.time())))
             self._bump()
         except sqlite3.Error:

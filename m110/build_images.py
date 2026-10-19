@@ -231,7 +231,7 @@ def _hero_identity(src: Path) -> str:
     content both change this string, so the cache invalidates on identity — not on
     mtime ordering (an older pick used to leave a stale hero, BUGS #17)."""
     try:
-        key = str(src.relative_to(config.DATA_ROOT))
+        key = src.relative_to(config.DATA_ROOT).as_posix()
     except ValueError:
         key = src.name
     return f"{key}\n{img_hash(src)}"
@@ -316,7 +316,7 @@ def render_images(catalog: dict, totals: dict, slugs=None, progress=None) -> dic
             # falls back to the thumbnail render). Conflating the two is what sent
             # "Reveal in file manager" on a .fit to the renders folder.
             try:
-                src_rel = str(im["path"].relative_to(config.DATA_ROOT))
+                src_rel = im["path"].relative_to(config.DATA_ROOT).as_posix()
             except ValueError:
                 src_rel = None
             full = src_rel if im["viewable"] else None

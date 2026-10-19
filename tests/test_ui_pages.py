@@ -2037,7 +2037,7 @@ def test_reveal_guide_opens_the_folder_not_the_file(tmp_path, monkeypatch, qapp)
     try:
         page._reload_guides()
         page._reveal_guide(0)
-        assert opened == [str(path.parent)]        # the Plans/ folder…
+        assert [pathlib.Path(p) for p in opened] == [path.parent]  # the Plans/ folder…
         assert opened[0] != str(path)              # …not the guide itself
     finally:
         page.deleteLater()

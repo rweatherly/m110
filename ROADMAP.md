@@ -1012,6 +1012,13 @@ build-time only, runtime stays offline).
 
 ### 6d — Multi-device: device-under-target + Dwarf remainders
 
+**Origin increments:** B1 safe session import and B2 catalog target names are
+implemented. B3 content-based session calibration deduplication and B4 shared
+root-calibration import/compatible library lookup are implemented for review;
+manual acceptance is pending. All use the existing store layout. Automatic Origin
+source discovery, observing-night normalization, FILTER grouping, stack display,
+and Origin Siril/planning presets remain follow-ups (B5–B11).
+
 Record device/source per session; introduce the optional
 `Images/<target>/<device>/` path level only when one target is actually shot on
 a **2nd device** (flat = default device). A device registry keyed to planning

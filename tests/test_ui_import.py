@@ -4,6 +4,8 @@ The recursive scan + collision engine is covered in test_ingest.py; here we driv
 the page: that pointing it at an arbitrary nested tree populates the grouped,
 selectable table with canonicalized copy destinations, and that Browse remembers
 recent places. qtbot/qapp come from pytest-qt."""
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("PySide6")
@@ -110,7 +112,7 @@ def test_holding_reveal_opens_folder(tmp_path, monkeypatch, qtbot):
     monkeypatch.setattr(QDesktopServices, "openUrl",
                         lambda url: opened.append(url.toLocalFile()))
     _action_buttons(page, 0)["Reveal"].click()
-    assert opened == [str(config.STAGING_DIR / "M94")]
+    assert [Path(path) for path in opened] == [config.STAGING_DIR / "M94"]
 
 
 def test_holding_selections_survive_benign_refresh(tmp_path, monkeypatch, qtbot):
