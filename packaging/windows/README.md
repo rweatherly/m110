@@ -14,7 +14,9 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build_windows.ps1
 Produces `dist\M110-<version>-setup.exe` (`<version>` = the full release version,
 `0.3.0-beta.6`, so betas don't collide; see `packaging/common/artifact_version.py`).
 
-For a portable feature-test build that cannot replace the installed release:
+## Portable ZIP for branch testing
+
+Install the build dependencies, then run:
 
 ```powershell
 pip install -e ".[build]"
@@ -23,8 +25,11 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build_portable.ps1
 ```
 
 This produces `dist\M110-portable-<git-sha>.zip`. Extract it and run
-`run-dev.cmd`; the launcher isolates settings and data under `D:\m110-dev` by
-default. Set `M110_DEV_ROOT` before launching to use another test location.
+`run-dev.cmd`; the launcher isolates settings and data under
+`%LOCALAPPDATA%\M110-dev` on the recipient's machine by default. Set
+`M110_DEV_ROOT` before launching to use another test location.
+`-DevRoot` changes the launcher's default. Pass `-PackageOnly -AppDirectory
+<built-app-path>` to package an existing build without running PyInstaller.
 
 ## Pieces
 
@@ -34,7 +39,7 @@ default. Set `M110_DEV_ROOT` before launching to use another test location.
 | `make_ico.py` | `app-icon@1024.png` → `M110.ico` (Pillow; embedded in the .exe + used as the setup icon). |
 | `M110.iss` | Inno Setup script — per-user install, Start-Menu + optional desktop shortcut, uninstaller. |
 | `build_windows.ps1` | Orchestrates icon → PyInstaller → Inno Setup. |
-| `build_portable.ps1` | Orchestrates icon → PyInstaller → isolated portable ZIP; requires no Inno Setup. |
+| `build_portable.ps1` | Runs the onedir PyInstaller build and creates a portable ZIP with its isolated launcher. |
 
 ## Prerequisites
 

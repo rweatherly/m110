@@ -1,101 +1,113 @@
+#Requires -Version 5.1
 <#
-Build a portable M110 ZIP for isolated feature testing.
+.SYNOPSIS
+Builds a self-contained M110 ZIP that launches against an isolated data store.
 
-    pip install -e ".[build]"
-    pip install "uranometria @ git+https://github.com/devonjones/uranometria"
-    powershell -ExecutionPolicy Bypass -File packaging\windows\build_portable.ps1
-
-Produces dist\M110-portable-<git-sha>.zip. The included run-dev.cmd keeps
-settings and data under D:\m110-dev by default, separate from an installed M110.
-
-Use -PackageOnly with an existing PyInstaller onedir output when testing or when
-the application folder has already been built.
+.DESCRIPTION
+Without -PackageOnly this invokes the Windows PyInstaller spec in a temporary
+build directory, then packages the resulting onedir app. -PackageOnly packages an
+already-built app.
 #>
-#Requires -Version 5
 [CmdletBinding()]
 param(
-    [switch]$PackageOnly,
-    [string]$AppDirectory,
-    [string]$OutputDirectory,
-    [string]$ArtifactSuffix
+    [switch] $PackageOnly,
+    [string] $AppDirectory,
+    [string] $OutputDirectory,
+    [string] $ArtifactSuffix,
+    [string] $DevRoot
 )
 
 $ErrorActionPreference = "Stop"
-
-$Here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Root = (Resolve-Path (Join-Path $Here "..\..")).Path
-if (-not $AppDirectory) { $AppDirectory = Join-Path $Root "dist\M110" }
-if (-not $OutputDirectory) { $OutputDirectory = Join-Path $Root "dist" }
-
-if (-not $PackageOnly) {
-    if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-        throw "python not found. Activate the build environment first."
-    }
-    python -c "import PyInstaller" 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        throw "PyInstaller not found. Run: pip install -e `".[build]`""
-    }
-    python -c "import uranometria" 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        throw "uranometria not found. Run: pip install `"uranometria @ git+https://github.com/devonjones/uranometria`""
-    }
-
-    Write-Host "==> generating M110.ico"
-    python (Join-Path $Here "make_ico.py")
-
-    Write-Host "==> PyInstaller onedir build"
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue `
-        (Join-Path $Root "build\M110"), (Join-Path $Root "dist\M110")
-    python -m PyInstaller (Join-Path $Here "M110.spec") --noconfirm --clean
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
+$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$python = Join-Path $repo ".venv\Scripts\python.exe"
+if (-not $AppDirectory) {
+    $AppDirectory = Join-Path $repo "dist\M110"
 }
-
-$AppDirectory = [IO.Path]::GetFullPath($AppDirectory)
-$OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
-$Executable = Join-Path $AppDirectory "M110.exe"
-if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
-    throw "Portable app executable not found: $Executable"
+if (-not $OutputDirectory) {
+    $OutputDirectory = Join-Path $repo "dist"
 }
-
 if (-not $ArtifactSuffix) {
     if (Get-Command git -ErrorAction SilentlyContinue) {
-        $ArtifactSuffix = (& git -C $Root rev-parse --short=7 HEAD 2>$null).Trim()
+        $ArtifactSuffix = (& git -C $repo rev-parse --short=7 HEAD 2>$null).Trim()
     }
-    if (-not $ArtifactSuffix) { $ArtifactSuffix = "local" }
+    if (-not $ArtifactSuffix) {
+        $ArtifactSuffix = Get-Date -Format "yyyyMMdd-HHmmss"
+    }
 }
 $ArtifactSuffix = $ArtifactSuffix -replace '[^A-Za-z0-9._-]', '-'
-if (-not $ArtifactSuffix) { throw "ArtifactSuffix must contain a filename-safe character." }
+if (-not $ArtifactSuffix) {
+    throw "ArtifactSuffix must contain a filename-safe character."
+}
 
-New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
-$Stage = Join-Path $OutputDirectory (".portable-stage-" + [guid]::NewGuid().ToString("N"))
-$Archive = Join-Path $OutputDirectory "M110-portable-$ArtifactSuffix.zip"
-
+$buildRoot = $null
 try {
-    Write-Host "==> staging portable app"
-    New-Item -ItemType Directory -Path $Stage | Out-Null
-    Copy-Item -LiteralPath $AppDirectory -Destination (Join-Path $Stage "M110") -Recurse
+    if (-not $PackageOnly) {
+        if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
+            throw "Project Python was not found at $python. Create .venv and install .[build] first."
+        }
+        & $python -c "import PyInstaller"
+        if ($LASTEXITCODE -ne 0) {
+            throw "PyInstaller was not found. Install .[build] in the project .venv."
+        }
+        & $python -c "import uranometria"
+        if ($LASTEXITCODE -ne 0) {
+            throw "uranometria was not found. Install it in the project .venv before building."
+        }
+        & $python (Join-Path $repo "packaging\windows\make_ico.py")
+        if ($LASTEXITCODE -ne 0) {
+            throw "Icon generation failed."
+        }
+        $buildRoot = Join-Path $repo (".portable-build-" + [guid]::NewGuid().ToString("N"))
+        $workPath = Join-Path $buildRoot "work"
+        $distPath = Join-Path $buildRoot "dist"
+        & $python -m PyInstaller (Join-Path $repo "packaging\windows\M110.spec") `
+            --noconfirm --clean --workpath $workPath --distpath $distPath
+        if ($LASTEXITCODE -ne 0) {
+            throw "PyInstaller failed."
+        }
+        $AppDirectory = Join-Path $distPath "M110"
+    }
 
-    $Launcher = @(
-        '@echo off',
-        'rem Runs this portable M110 build isolated from any installed M110.',
-        'rem Override the location with:  set M110_DEV_ROOT=E:\somewhere',
-        'if "%M110_DEV_ROOT%"=="" set "M110_DEV_ROOT=D:\m110-dev"',
-        'set "USERPROFILE=%M110_DEV_ROOT%\home"',
-        'set "M110_DATA_ROOT=%M110_DEV_ROOT%\data"',
-        'if not exist "%USERPROFILE%" mkdir "%USERPROFILE%"',
-        'if not exist "%M110_DATA_ROOT%" mkdir "%M110_DATA_ROOT%"',
-        'start "" "%~dp0M110\M110.exe"'
-    )
-    Set-Content -LiteralPath (Join-Path $Stage "run-dev.cmd") -Value $Launcher -Encoding ascii
+    if (-not (Test-Path -LiteralPath $AppDirectory -PathType Container)) {
+        throw "Portable app directory was not found: $AppDirectory"
+    }
+    $resolvedApp = (Resolve-Path -LiteralPath $AppDirectory).Path
+    if (-not (Test-Path -LiteralPath (Join-Path $resolvedApp "M110.exe") -PathType Leaf)) {
+        throw "Portable app directory must contain M110.exe: $resolvedApp"
+    }
 
-    if (Test-Path -LiteralPath $Archive) { Remove-Item -LiteralPath $Archive -Force }
-    Write-Host "==> creating portable ZIP"
-    Compress-Archive -Path (Join-Path $Stage "*") -DestinationPath $Archive
+    New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+    $output = (Resolve-Path -LiteralPath $OutputDirectory).Path
+    $archive = Join-Path $output "M110-portable-$ArtifactSuffix.zip"
+    $stage = Join-Path $output (".portable-stage-" + [guid]::NewGuid().ToString("N"))
+
+    try {
+        New-Item -ItemType Directory -Path $stage | Out-Null
+        Copy-Item -LiteralPath $resolvedApp -Destination (Join-Path $stage "M110") -Recurse
+        $launcher = @"
+@echo off
+setlocal
+rem Runs this portable M110 build isolated from any installed M110.
+rem Override the location with: set M110_DEV_ROOT=E:\somewhere
+if "%M110_DEV_ROOT%"=="" set "M110_DEV_ROOT=$(if ($DevRoot) { $DevRoot } else { '%LOCALAPPDATA%\M110-dev' })"
+set "USERPROFILE=%M110_DEV_ROOT%\home"
+set "M110_DATA_ROOT=%M110_DEV_ROOT%\data"
+if not exist "%USERPROFILE%" mkdir "%USERPROFILE%"
+if not exist "%M110_DATA_ROOT%" mkdir "%M110_DATA_ROOT%"
+start "" "%~dp0M110\M110.exe"
+"@
+        [System.IO.File]::WriteAllText((Join-Path $stage "run-dev.cmd"), $launcher,
+                                       [System.Text.Encoding]::ASCII)
+        Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $archive -Force
+    } finally {
+        if (Test-Path -LiteralPath $stage) {
+            Remove-Item -LiteralPath $stage -Recurse -Force
+        }
+    }
+
+    Write-Output "Portable package: $archive"
+} finally {
+    if ($buildRoot -and (Test-Path -LiteralPath $buildRoot)) {
+        Remove-Item -LiteralPath $buildRoot -Recurse -Force
+    }
 }
-finally {
-    if (Test-Path -LiteralPath $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force }
-}
-
-Write-Host "==> built: $Archive"
-Write-Host "    Extract the ZIP and run run-dev.cmd (isolated under D:\m110-dev by default)."
-

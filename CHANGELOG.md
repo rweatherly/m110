@@ -11,11 +11,20 @@ changes a **user** would notice, per release.
 ## [Unreleased]
 
 ### Added
-- **Portable Windows builds for feature testing.** Contributors can create a
-  self-contained ZIP with `packaging\windows\build_portable.ps1`, extract it
-  beside an installed M110, and launch through `run-dev.cmd`. The launcher keeps
-  test settings and data under a separate development root, so branch testing
-  cannot overwrite the installed release's configuration or library.
+- **Celestron Origin session import.** Import now recognizes current Origin session
+  folders, copies them without changing the source, and stamps reused camera
+  filenames with the session start time. Lights and session calibration frames go
+  to the capture target; the device TIFF stack and its JSON facts stay together in
+  the device-stack tier. Reimporting a session does not offer duplicates.
+- **Origin targets use catalog details.** Recognized Origin labels now route to
+  their bundled catalog target before import, so the Library shows the full record
+  for NGC 281, Sh2-190 (Heart Nebula), and M31 instead of an unknown placeholder.
+  When a catalog record has no common name, Origin's system-generated object label
+  supplies it without replacing an existing curated name.
+- **Portable Windows test package.** `packaging\windows\build_portable.ps1` creates
+  a ZIP of the onedir app with `run-dev.cmd`. The launcher keeps test settings and
+  data under `%LOCALAPPDATA%\M110-dev` on the machine running it by default,
+  separate from an installed release; explicit scratch-root overrides still work.
 - **Your Seestar's dark library comes in with your captures.** Recent Seestar
   firmware keeps its master darks in a `darklibrary` folder next to `MyWorks`.
   Importing from the Seestar now copies them into `Calibration/<your telescope>/darks/`
@@ -54,6 +63,12 @@ changes a **user** would notice, per release.
   given one telescope's masters.
 
 ### Fixed
+- Origin preview remaps preserve session filenames and remembered target choices,
+  so importing again does not add extra copies. Labels such as
+  `Cave Nebula - Sh2-155` resolve to their catalog entry, and refresh fills missing
+  Origin names on existing Library entries while preserving curated names.
+- Cancelling a loose-FITS scan now interrupts Origin detection between header
+  reads; scan logging no longer repeats the detection pass.
 - **Calibration frames now reach every Siril job on a mixed-filter object.** They
   were linked once at the top of the processing folder, but the Naztronomy script
   looks for `darks/` next to the `lights/` it is run on, which for an object shot

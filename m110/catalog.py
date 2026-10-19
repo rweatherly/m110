@@ -11,6 +11,7 @@ data.
 """
 from __future__ import annotations
 
+import json
 import re
 import tomllib
 
@@ -811,6 +812,46 @@ def _normalize_designation(text: str) -> str:
     return "".join(ch for ch in str(text).lower() if ch.isalnum())
 
 
+_ORIGIN_OBJECT_NAME_RE = re.compile(
+    r"^\s*(?P<name>.+?)\s+-\s+(?P<designation>[A-Za-z][A-Za-z0-9]*\s*-?\s*\d+)\s*$"
+)
+
+
+def _origin_friendly_name(target_dir, canonical_id: str) -> str | None:
+    """Return an Origin-provided friendly name for this canonical target.
+
+    B1 preserves Origin's ``info.json`` beside the stack.  Its system-generated
+    ``StackedInfo.objectName`` commonly has the form ``Pacman Nebula - NGC 281``.
+    Use the descriptive part only if the trailing designation is this target, so
+    a copied or malformed sidecar cannot name a different catalog object.
+    """
+    stacks = target_dir / "seestar-stacks"
+    if not stacks.is_dir():
+        return None
+    paths = sorted({*stacks.glob("*_info.json"), stacks / "info.json"})
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        info = raw.get("StackedInfo") if isinstance(raw, dict) else None
+        label = info.get("objectName") if isinstance(info, dict) else None
+        if not isinstance(label, str):
+            continue
+        match = _ORIGIN_OBJECT_NAME_RE.match(label)
+        if not match:
+            continue
+        if (_normalize_designation(match.group("designation"))
+                != _normalize_designation(canonical_id)):
+            continue
+        name = match.group("name").strip()
+        if name:
+            return name
+    return None
+
+
 def slug_for_designation(text: str) -> str | None:
     """The slug a designation names, or None. "C 34"/"C34"/"c-34" → ``ngc-6960``.
 
@@ -838,7 +879,8 @@ def add_captured_objects(resolve_coords: bool = True) -> list[str]:
     A capture **target** is never itself promoted into the object axis — that's the
     Images/ axis, and doing so created a synthetic `m81-m82` pseudo-object that then
     shadowed the folder→slug split (the M81/M82 under-count). Idempotent + additive:
-    never touches an existing entry. Returns the slugs added.
+    fills only missing Origin friendly names on existing entries. Returns only
+    the slugs added, not entries whose names were backfilled.
     """
     from . import scan_sessions  # local import: avoids any import cycle
     path = config.LIBRARY_TOML
@@ -849,6 +891,7 @@ def add_captured_objects(resolve_coords: bool = True) -> list[str]:
     known = set(cat) | set(ref)      # the object universe a folder may resolve into
 
     new: dict[str, dict] = {}
+    names_changed = False
     for d in sorted(p for p in config.IMAGES_DIR.iterdir() if p.is_dir()):
         if not ((d / "lights").is_dir() or (d / "seestar-stacks").is_dir()):
             continue                                  # not a capture target
@@ -858,10 +901,22 @@ def add_captured_objects(resolve_coords: bool = True) -> list[str]:
             # Known catalog object(s) — ensure each is in the Library, with its
             # full reference metadata. A combined folder promotes every member.
             for m in members:
-                if m in cat or m in new or m not in ref:
+                if m in cat:
+                    entry = cat[m]
+                    if _is_missing("name", entry.get("name")):
+                        friendly_name = _origin_friendly_name(d, entry.get("id", m))
+                        if friendly_name:
+                            entry["name"] = friendly_name
+                            names_changed = True
+                    continue
+                if m in new or m not in ref:
                     continue
                 entry = dict(ref[m])
                 entry.setdefault("id", m.upper())
+                if _is_missing("name", entry.get("name")):
+                    friendly_name = _origin_friendly_name(d, entry["id"])
+                    if friendly_name:
+                        entry["name"] = friendly_name
                 new[m] = entry
             continue
         # Off-catalog target: no catalog object to credit, so the target doubles
@@ -881,6 +936,8 @@ def add_captured_objects(resolve_coords: bool = True) -> list[str]:
                 entry["ra_deg"], entry["dec_deg"] = rd
         new[slug] = entry
 
+    if names_changed:
+        _write_library(cat)
     if new:
         _append_library_entries(new)
     return list(new)

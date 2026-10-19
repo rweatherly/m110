@@ -89,6 +89,7 @@ class Layout:
 LAYOUTS = [
     Layout("seestar",         "Seestar",         True),   # folder-name conventions (_sub/Stacked_/_photo)
     Layout("dwarf",           "DwarfLab Dwarf",  True),    # DWARF_RAW_*/STARTRAILS_* session folders
+    Layout("origin",          "Celestron Origin", True),   # timestamped on-device session folders
     Layout("m110-store",      "M110 store",      True),    # FITS/<obj>/{lights,darks,…}, Finished Images/, Seestar_stacks/
     Layout("calibration",     "Calibration masters", True), # a store's Calibration/<device>/<tier>/
     Layout("seestar-darks",   "Seestar dark library", True), # <volume>/darklibrary/<exp>s/MasterDark_*
@@ -366,9 +367,9 @@ def _normalize_imagetyp(raw) -> str | None:
 
 def frame_info(path: str) -> dict | None:
     """Normalized header facts from a FITS frame, or None.
-    Returns {object, imagetyp, filter, ra_deg, dec_deg} — `imagetyp` folded onto
-    light/dark/flat/bias (or None), coords in degrees (Seestar RA/DEC, else
-    sexagesimal OBJCTRA/OBJCTDEC). Header-only read (no pixel load)."""
+    Returns object/type/filter/pointing/telescope/creator facts - `imagetyp` is
+    folded onto light/dark/flat/bias (or None), coords are degrees (Seestar
+    RA/DEC, else sexagesimal OBJCTRA/OBJCTDEC). Header-only read (no pixels)."""
     try:
         from astropy.io import fits
     except ImportError:
@@ -398,6 +399,8 @@ def frame_info(path: str) -> dict | None:
         "ra_deg": ra_deg,
         "dec_deg": dec_deg,
         "telescop": str(tel).strip() if tel not in (None, "") else None,
+        "creator": (str(hdr.get("CREATOR")).strip() or None)
+                   if hdr.get("CREATOR") else None,
     }
 
 
@@ -487,7 +490,7 @@ def retarget(group: IngestGroup, new_object: str) -> IngestGroup:
     new_flag = not config.target_dir(new_object).is_dir()
     new_ops = []
     for op in group.ops:
-        dest = dst_dir / Path(op.src).name
+        dest = dst_dir / Path(op.dest).name
         new_ops.append(replace(op, dest=str(dest),
                                dest_rel=str(dest.relative_to(root)),
                                new_object=new_flag, object=new_object))
@@ -584,7 +587,7 @@ _ROOT_STACK_RE = re.compile(r"stacked|result|\d+x\d+sec", re.IGNORECASE)
 
 
 def _emit_files(src_dir: Path, files, kind: str, obj: str, group: str,
-                action: str, layout: str) -> list[IngestOp]:
+                action: str, layout: str, dest_name=None) -> list[IngestOp]:
     """Ops routing `files` (names in `src_dir`) into the target subdir for `kind`
     under object `obj`, skipping ones already present at the dest. `group` is the
     grouping/label key shown in the preview.
@@ -598,12 +601,14 @@ def _emit_files(src_dir: Path, files, kind: str, obj: str, group: str,
     if kind == "light":
         subs = [f for f in files if config.is_light_frame(f)]
         nonsubs = [f for f in files if not config.is_light_frame(f)]
-        ops = _emit_one_kind(src_dir, subs, "light", obj, group, action, layout)
+        ops = _emit_one_kind(src_dir, subs, "light", obj, group, action, layout,
+                             dest_name)
         if nonsubs:
             ops += _emit_one_kind(src_dir, nonsubs, "working", obj, group,
-                                  action, layout)
+                                  action, layout, dest_name)
         return ops
-    return _emit_one_kind(src_dir, files, kind, obj, group, action, layout)
+    return _emit_one_kind(src_dir, files, kind, obj, group, action, layout,
+                          dest_name)
 
 
 # The two tiers that hold raw subs. A sub in **either** is already in the library,
@@ -620,7 +625,7 @@ def _light_tier_names(obj: str) -> set[str]:
 
 
 def _emit_one_kind(src_dir: Path, files, kind: str, obj: str, group: str,
-                   action: str, layout: str) -> list[IngestOp]:
+                   action: str, layout: str, dest_name=None) -> list[IngestOp]:
     """Route `files` into the single target subdir for `kind` (skip already-present)."""
     root = config.DATA_ROOT
     dst_dir = _KIND_DIR[kind](obj)
@@ -629,16 +634,190 @@ def _emit_one_kind(src_dir: Path, files, kind: str, obj: str, group: str,
     new_object = kind not in _CAL_KINDS and not config.target_dir(obj).is_dir()
     ops: list[IngestOp] = []
     for f in files:
-        if f in existing:
+        destination_name = dest_name(f) if dest_name else f
+        if destination_name in existing:
             continue
-        dest = dst_dir / f
+        dest = dst_dir / destination_name
         ops.append(IngestOp(str(src_dir / f), str(dest), kind, group,
                             str(dest.relative_to(root)), new_object, action,
                             _size(src_dir / f), layout, obj))
     return ops
 
 
-def _detect_layout(src_dir: Path, name: str) -> str | None:
+_ORIGIN_FOLDER_STAMP_RE = re.compile(
+    r"_(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})$"
+)
+_ORIGIN_DATETIME_RE = re.compile(
+    r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})"
+)
+_ORIGIN_TRAILING_DESIGNATION_RE = re.compile(
+    r"(?:^|\s+-\s+)([A-Za-z][A-Za-z0-9]*\s*-?\s*\d+)\s*$"
+)
+
+
+def _origin_info(src_dir: Path) -> dict | None:
+    """The structured session facts from Origin's ``info.json``, if present."""
+    info_name = next((f for f in _all_files(src_dir) if f.lower() == "info.json"), None)
+    if not info_name:
+        return None
+    try:
+        payload = json.loads((src_dir / info_name).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    stacked = payload.get("StackedInfo") if isinstance(payload, dict) else None
+    return stacked if isinstance(stacked, dict) else None
+
+
+def _origin_stamp(folder_name: str, info: dict | None) -> str | None:
+    """Stable session stamp used to keep Origin's restarted counters distinct."""
+    match = _ORIGIN_FOLDER_STAMP_RE.search(folder_name)
+    if not match and info:
+        date_time = info.get("dateTime")
+        match = _ORIGIN_DATETIME_RE.search(str(date_time)) if date_time else None
+    if not match:
+        return None
+    year, month, day, hour, minute, second = match.groups()
+    return f"{year}{month}{day}-{hour}{minute}{second}"
+
+
+def _origin_folder_target(folder_name: str) -> str | None:
+    """The readable target prefix of an Origin session-folder name, if present."""
+    match = _ORIGIN_FOLDER_STAMP_RE.search(folder_name)
+    if not match or match.start() == 0:
+        return None
+    return folder_name[:match.start()].replace("_", " ")
+
+
+def _origin_common_name_target(name: str) -> str | None:
+    """Return a catalog id when an Origin label is a known common name."""
+    normalized = re.sub(r"[^a-z0-9]+", "", name.lower())
+    if not normalized:
+        return None
+    try:
+        library = catalog.load_library()
+    except Exception:
+        library = {}
+    for source in (library, catalog.load_reference()):
+        for entry in source.values():
+            common_name = entry.get("name")
+            if (common_name and re.sub(r"[^a-z0-9]+", "", str(common_name).lower())
+                    == normalized):
+                return _safe_segment(entry.get("id") or name)
+    return None
+
+
+def _canonical_origin_target(label: str | None, folder_name: str) -> str | None:
+    """Resolve an Origin label to a catalog target without changing other devices.
+
+    Origin can supply the target through structured JSON, a FITS OBJECT card, or
+    only its session-folder name.  Preserve a pre-B2 target directory if it
+    already exists; this branch intentionally does not migrate prior imports.
+    """
+    if any(key.lower() == folder_name.lower() for key in load_aliases()):
+        return canonical_target(folder_name)
+    source = _usable_object(label) or _origin_folder_target(folder_name)
+    if not source:
+        return None
+    name = _safe_segment(source.replace("_", " "))
+    existing = _existing_image_dir(name)
+    if existing:
+        return existing
+
+    trailing = _ORIGIN_TRAILING_DESIGNATION_RE.search(name)
+    if trailing and catalog.slug_for_designation(trailing.group(1)):
+        return canonical_target(trailing.group(1))
+
+    common = _origin_common_name_target(name)
+    if not common and trailing:
+        common = _origin_common_name_target(name[:trailing.start()].strip(" -"))
+    if common:
+        return canonical_target(common)
+    return canonical_target(name)
+
+
+def _origin_stamped_name(filename: str, stamp: str) -> str:
+    path = Path(filename)
+    return f"{path.stem}_{stamp}{path.suffix}"
+
+
+def _origin_stack_name(filename: str, stamp: str) -> str:
+    return f"{stamp}_{filename}"
+
+
+def _is_origin_session_dir(src_dir: Path, should_cancel=None) -> bool:
+    """Whether a directory is an Origin session, without loading image pixels."""
+    if _origin_info(src_dir) is not None:
+        return True
+    for filename in _fit_files(src_dir):
+        if should_cancel and should_cancel():
+            raise IngestCancelled()
+        info = frame_info(str(src_dir / filename))
+        creator = (info or {}).get("creator") or ""
+        if creator.lower().startswith("origin"):
+            return True
+    return False
+
+
+def _classify_origin_dir(src_dir: Path, name: str, action: str,
+                         handled: set, should_cancel=None) -> list[IngestOp]:
+    """Import an Origin session without conflating its restarted frame counters.
+
+    Origin names every session's frames ``Light0001.fits`` and keeps calibration
+    frames beside them.  The session time is therefore part of every destination
+    filename.  B2 resolves its JSON/FITS/folder target label to a catalog target.
+    """
+    info_json = _origin_info(src_dir)
+    stamp = _origin_stamp(name, info_json)
+    if not stamp:
+        return []
+
+    fits = _fit_files(src_dir)
+    obj = _usable_object((info_json or {}).get("objectName"))
+    if not obj:
+        # Prefer a light header: calibration frames often name themselves DARK,
+        # FLAT, or BIAS and must never become capture targets.
+        details = []
+        for filename in fits:
+            if should_cancel and should_cancel():
+                raise IngestCancelled()
+            details.append((filename, frame_info(str(src_dir / filename))))
+        for filename, facts in details:
+            if facts and facts["imagetyp"] == "light":
+                obj = _usable_object(facts["object"])
+                if obj:
+                    break
+    obj = _canonical_origin_target(obj, name)
+    if not obj:
+        return []
+
+    ops: list[IngestOp] = []
+    buckets: dict[str, list[str]] = {}
+    for filename in fits:
+        if should_cancel and should_cancel():
+            raise IngestCancelled()
+        facts = frame_info(str(src_dir / filename))
+        kind = (facts["imagetyp"] if facts and facts["imagetyp"] in ("dark", "flat", "bias")
+                else "light")
+        buckets.setdefault(kind, []).append(filename)
+    for kind, files in buckets.items():
+        handled.update(files)
+        ops += _emit_files(src_dir, files, kind, obj, name, action, "origin",
+                           lambda filename: _origin_stamped_name(filename, stamp))
+
+    all_files = _all_files(src_dir)
+    stacks = [f for f in all_files
+              if Path(f).suffix.lower() in (".tif", ".tiff")
+              and Path(f).stem.lower() == "finalstackedmaster"]
+    sidecars = [f for f in all_files
+                if f.lower() == "info.json" or re.match(r"^dark.*\.json$", f, re.I)]
+    handled.update(stacks)
+    handled.update(sidecars)
+    ops += _emit_files(src_dir, stacks + sidecars, "stack", obj, name, action,
+                       "origin", lambda filename: _origin_stack_name(filename, stamp))
+    return ops
+
+
+def _detect_layout(src_dir: Path, name: str, should_cancel=None) -> str | None:
     """Which LAYOUTS recognizer claims this directory (or None to skip it)."""
     if name.lower() in _SKIP_DIRS:
         return None
@@ -668,6 +847,11 @@ def _detect_layout(src_dir: Path, name: str) -> str | None:
         return "seestar"
     if any(is_stacked_fit(f) for f in _fit_files(src_dir)):
         return "seestar"
+    # Origin is deliberately after the Dwarf/Seestar fast paths so probing a
+    # common ``*_sub`` folder never opens every FITS header just to reject it.
+    # It still wins over the generic raw-FITS fallback below.
+    if _is_origin_session_dir(src_dir, should_cancel):
+        return "origin"
     # Anything else holding loose FITS → sort by header.
     if _fit_files(src_dir):
         return "raw-fits"
@@ -1079,7 +1263,7 @@ def _classify_dir(src_dir: Path, name: str, action: str,
     held"). `ctx` is the per-scan memo the recognizers may share."""
     if _in_own_store(src_dir) or name.lower() in _SKIP_DIRS:
         return []
-    layout = _detect_layout(src_dir, name)
+    layout = _detect_layout(src_dir, name, should_cancel)
     handled: set[str] = set()      # files the recognizer claimed (new OR already-present)
     if layout == "m110-store":
         ops = _classify_store_dir(src_dir, name, action, handled)
@@ -1089,6 +1273,8 @@ def _classify_dir(src_dir: Path, name: str, action: str,
         ops = _classify_seestar_darks_dir(src_dir, name, action, handled, ctx)
     elif layout == "dwarf":
         ops = _classify_dwarf_dir(src_dir, name, action, handled, should_cancel)
+    elif layout == "origin":
+        ops = _classify_origin_dir(src_dir, name, action, handled, should_cancel)
     elif layout == "seestar":
         ops = _classify_seestar_dir(src_dir, name, action, handled, should_cancel)
     elif layout == "raw-fits":
@@ -1109,6 +1295,9 @@ def _classify_dir(src_dir: Path, name: str, action: str,
     leftover = [f for f in _content_files(src_dir) if f not in handled]
     ops += _emit_unassigned(src_dir, leftover, hold_name or name, action,
                             layout or "unknown")
+    _log.debug("scan: %s → layout=%s content=%d ops=%d held=%d",
+               src_dir, layout, len(_content_files(src_dir)), len(ops),
+               sum(1 for op in ops if op.kind == "unassigned"))
     return ops
 
 
@@ -1205,9 +1394,6 @@ def scan_directory_plan(root, action: str = "copy", should_cancel=None,
         content = len(_content_files(d))
         if content or dir_ops:
             dirs_visited += 1
-            held = sum(1 for o in dir_ops if o.kind == "unassigned")
-            _log.debug("scan: %s → layout=%s content=%d ops=%d held=%d",
-                       d, _detect_layout(d, d.name), content, len(dir_ops), held)
         else:
             dirs_skipped += 1                     # a structural/empty dir (no content)
         ops.extend(dir_ops)

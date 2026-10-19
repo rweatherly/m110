@@ -229,13 +229,22 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build_portable.ps1
 
 The script produces `dist\M110-portable-<git-sha>.zip`. Extract it and launch
 `run-dev.cmd`; it sets both `USERPROFILE` and `M110_DATA_ROOT` beneath
-`D:\m110-dev`, keeping the installed release's settings and data untouched. To
-use another scratch location, set `M110_DEV_ROOT` before running the launcher.
+`%LOCALAPPDATA%\M110-dev` on the recipient's machine, keeping the installed
+release's settings and data untouched. To use another scratch location, set
+`M110_DEV_ROOT` before running the launcher, or pass `-DevRoot` at packaging time
+to embed an explicit default. The runtime override takes precedence. Packaging
+does not redirect the build shell's profile or data-root environment.
 Record the ZIP name in the branch handoff so the tested commit is unambiguous.
 
 `-PackageOnly` skips PyInstaller and packages an existing `dist\M110` onedir
 build. It is intended for packaging tests and CI reuse, not as the normal branch
 acceptance command.
+
+Origin regressions are covered in `tests/test_ingest_origin.py`: remap two
+sessions with reused filenames and reimport them; remember a session-folder remap
+and rescan; resolve `Cave Nebula - Sh2-155`; refresh an existing blank Library name
+without changing a curated name. Loose-FITS layout probing must stop between
+header reads on Cancel and must not repeat header reads just for debug logging.
 
 ## 1. Automated tests (the gate)
 
