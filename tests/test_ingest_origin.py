@@ -280,6 +280,22 @@ def test_origin_shared_masters_are_not_assigned_across_two_cameras_of_one_model(
     assert [op.kind for op in ops if Path(op.src) == path] == ["unassigned"]
 
 
+def test_origin_shared_masters_are_not_assigned_across_cameras_in_one_session(
+        tmp_path, monkeypatch):
+    """Every sibling light matters when attributing a root master."""
+    seed_root(tmp_path, monkeypatch)
+    src = tmp_path / "Origin"
+    session = _origin_session(src, folder="Pacman_2026-09-26_21-01-08")
+    with fits.open(session / "Light0002.fits", mode="update") as hdus:
+        hdus[0].header["CAMERA"] = "Origin178-another-unit"
+    path = src / "Calibration" / "dark0007.fits"
+    _origin_fits(path, "DARK")
+    with fits.open(path, mode="update") as hdus:
+        del hdus[0].header["TELESCOP"]
+    ops = ingest.scan_directory_plan(src)
+    assert [op.kind for op in ops if Path(op.src) == path] == ["unassigned"]
+
+
 def test_origin_empty_root_calibration_changes_nothing(tmp_path, monkeypatch):
     seed_root(tmp_path, monkeypatch)
     src = tmp_path / "Origin"

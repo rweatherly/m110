@@ -88,6 +88,13 @@ class MatchResult:
         return bool(self.as_dict())
 
 
+# Size limit: 1 MiB (1,048,576 bytes) for the JSON file Origin writes beside its
+# frames (a session's info.json / <stamp>_info.json, or a master's <name>.json).
+# We call it a "sidecar", as elsewhere in M110. These files are only a few KB, so
+# a larger one is treated as corrupt and ignored instead of being parsed.
+_MAX_SIDECAR_BYTES = 1 << 20
+
+
 def _num(v, cast=float):
     try:
         return cast(v) if v is not None else None
@@ -121,6 +128,8 @@ def frame_facts(path) -> dict | None:
         else:
             sidecar = p.with_suffix(".json")
         try:
+            if sidecar.stat().st_size > _MAX_SIDECAR_BYTES:
+                raise ValueError("Origin JSON over 1 MiB; ignored")
             data = json.loads(sidecar.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 metadata = data.get("StackedInfo", data)
@@ -128,7 +137,7 @@ def frame_facts(path) -> dict | None:
                     metadata = metadata.get("captureParams", metadata)
                 if not isinstance(metadata, dict):
                     metadata = {}
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             pass
     return {
         "imagetyp": _normalize_imagetyp(h.get("IMAGETYP")),

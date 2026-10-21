@@ -765,10 +765,25 @@ def _calibration_content(dst_dir: Path, ctx: dict, should_cancel=None) -> tuple[
     cache = ctx.setdefault("calibration_content", {})
     if dst_dir not in cache:
         files = _all_files(dst_dir)
-        hashes = {_digest(str(dst_dir / f), should_cancel): dst_dir / f
-                  for f in files if config.is_fits_file(f)}
+        hashes: dict = {}
+        for f in files:
+            if not config.is_fits_file(f):
+                continue
+            try:
+                hashes[_digest(str(dst_dir / f), should_cancel)] = dst_dir / f
+            except OSError:
+                continue             # unreadable master: can't dedup against it, don't abort
         cache[dst_dir] = (hashes, set(files))
     return cache[dst_dir]
+
+
+def _scan_digest(src, ctx: dict, should_cancel=None) -> str:
+    """`_digest` memoised per scan, so a master and its sidecar hash it once."""
+    cache = ctx.setdefault("source_digests", {})
+    key = str(src)
+    if key not in cache:
+        cache[key] = _digest(key, should_cancel)
+    return cache[key]
 
 
 def _emit_origin_calibration(src_dir: Path, files, kind: str, obj: str,
@@ -780,7 +795,7 @@ def _emit_origin_calibration(src_dir: Path, files, kind: str, obj: str,
     ops: list[IngestOp] = []
     for filename in files:
         src = src_dir / filename
-        digest = _digest(str(src), should_cancel)
+        digest = _scan_digest(src, ctx, should_cancel)
         if digest in hashes:
             continue
         name = _origin_stamped_name(filename, stamp) if stamp else filename
@@ -1154,7 +1169,13 @@ def _origin_root_device(root: Path, ctx: dict, should_cancel=None) -> str | None
     cache = ctx.setdefault("origin_root_device", {})
     if root not in cache:
         identities: set[tuple] = set()
-        for folder in sorted(root.iterdir()):
+        try:
+            folders = sorted(root.iterdir())
+        except OSError:
+            folders = []
+        for folder in folders:
+            if len(identities) > 1:
+                break                # already ambiguous; stop opening files
             if not folder.is_dir() or config.is_hidden_name(folder.name):
                 continue
             for name in _fit_files(folder):
@@ -1196,7 +1217,7 @@ def _classify_origin_calibration(src_dir: Path, handled: set, ctx: dict,
             handled.add(sidecar.name)
             dst_dir = _KIND_DIR[f"cal-{kind}"](_safe_segment(device))
             hashes, _names = _calibration_content(dst_dir, ctx, should_cancel)
-            master = hashes[_digest(str(src_dir / filename), should_cancel)]
+            master = hashes[_scan_digest(src_dir / filename, ctx, should_cancel)]
             dest = master.with_suffix(".json")
             if not dest.exists() and not any(op.dest == str(dest) for op in ops):
                 ops.append(IngestOp(
