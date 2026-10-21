@@ -657,15 +657,25 @@ _ORIGIN_TRAILING_DESIGNATION_RE = re.compile(
 )
 
 
+# Origin's info.json / master .json are a few KB; anything over 1 MiB is ignored.
+# calibration.frame_facts applies the same cap to the JSON it reads.
+ORIGIN_JSON_MAX_BYTES = 1 << 20
+
+
 def _origin_info(src_dir: Path) -> dict | None:
     """Structured session facts, bounded for automatic source discovery too."""
     try:
-        info_name = next((f for f in _all_files(src_dir) if f.lower() == "info.json"), None)
-        if not info_name:
+        # Check file type only for matching names: discovery probes whole drives,
+        # and a session folder can hold thousands of frames. Filter directories
+        # before sorting so an INFO.JSON directory cannot hide an info.json file.
+        with os.scandir(src_dir) as entries:
+            names = sorted(e.name for e in entries
+                           if e.name.lower() == "info.json" and e.is_file())
+        if not names:
             return None
-        with (src_dir / info_name).open("rb") as stream:
-            data = stream.read((1 << 20) + 1)  # Origin metadata is normally a few KB.
-        if len(data) > (1 << 20):
+        with (src_dir / names[0]).open("rb") as stream:
+            data = stream.read(ORIGIN_JSON_MAX_BYTES + 1)
+        if len(data) > ORIGIN_JSON_MAX_BYTES:
             return None
         payload = json.loads(data.decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError):

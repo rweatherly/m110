@@ -247,9 +247,10 @@ App-bundled **reference data** (ships in the package, not in the store):
 
 **Origin import sources (B5).** Source discovery is read-only and shallow: a root
 qualifies when a direct session child has `info.json` with a `StackedInfo` object.
-Metadata reads are capped at 1 MiB; malformed, oversized or inaccessible JSON is
-ignored. The Import page probes mounted roots and its existing `import_recents`
-locations in the background. Selecting a source uses the existing confirmed-copy
+Metadata reads share the 1 MiB cap with calibration sidecars; malformed,
+oversized or inaccessible JSON is ignored. The Import page probes mounted roots
+and its existing `import_recents` locations in the background. Selecting a source
+uses the existing confirmed-copy
 writer and calibration routing below. Source discovery adds no stored format,
 store migration, or `.store_version` change.
 

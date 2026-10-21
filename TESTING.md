@@ -258,8 +258,11 @@ The packager's real `-PackageOnly`/recipient launcher tests remain in
 Origin B5 coverage is in `tests/test_sources.py` and `tests/test_ui_import.py`:
 arbitrary drive labels, copied roots, multiple sources, malformed/oversized JSON,
 unreadable mounts/sessions, cancellation, standard platform mount candidates,
-and a responsive UI. Detected-source UI tests preview and confirm real copies
-with absent, empty and populated `Calibration/`; cancelling confirmation writes
+and a responsive UI. A case-sensitive listing fixture ensures an `INFO.JSON`
+directory cannot hide a valid `info.json` file, including on Windows test hosts.
+Unreadable-session injection targets `os.scandir` and checks the failed read as
+well as discovery continuing to a valid sibling. Detected-source UI tests confirm
+real copies with absent, empty and populated `Calibration/`; cancelling confirmation writes
 nothing, reimport is empty, and source hashes remain unchanged. Existing Seestar
 sources, Recent places and the current selection are preserved.
 

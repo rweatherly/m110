@@ -1,5 +1,7 @@
 """Read-only device discovery against scratch mounts, never live telescope data."""
 import json
+import os
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -75,14 +77,40 @@ def test_origin_discovery_continues_after_an_unreadable_root(tmp_path, monkeypat
 def test_origin_discovery_skips_an_unreadable_session(tmp_path, monkeypatch):
     broken = _session(tmp_path, name="a-offline")
     _session(tmp_path, name="b-valid")
-    original = Path.iterdir
+    original = os.scandir
 
-    def iterdir(path):
-        if path == broken:
+    def scandir(path):
+        if Path(path) == broken:
             raise PermissionError("unavailable session")
         return original(path)
 
-    monkeypatch.setattr(Path, "iterdir", iterdir)
+    monkeypatch.setattr(os, "scandir", scandir)
+    assert ingest._origin_info(broken) is None
+    assert sources.find_origin_roots([tmp_path]) == [tmp_path]
+
+
+def test_origin_info_directory_does_not_hide_a_case_variant_file(tmp_path, monkeypatch):
+    """Case-sensitive mounts may contain both an INFO.JSON dir and info.json file."""
+    session = _session(tmp_path, payload={"StackedInfo": {"objectName": "NGC 281"}})
+    original_scan = os.scandir
+    original_is_file = Path.is_file
+    entries = [SimpleNamespace(name="INFO.JSON", is_file=lambda: False),
+               SimpleNamespace(name="info.json", is_file=lambda: True)]
+
+    def scandir(path):
+        if Path(path) == session:
+            return nullcontext(iter(entries))
+        return original_scan(path)
+
+    def is_file(path):
+        if path.parent == session and path.name == "INFO.JSON":
+            return False
+        return original_is_file(path)
+
+    # Simulate a case-sensitive listing on Windows too; the JSON read is real.
+    monkeypatch.setattr(os, "scandir", scandir)
+    monkeypatch.setattr(Path, "is_file", is_file)
+    assert ingest._origin_info(session) == {"objectName": "NGC 281"}
     assert sources.find_origin_roots([tmp_path]) == [tmp_path]
 
 

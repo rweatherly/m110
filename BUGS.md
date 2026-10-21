@@ -15,6 +15,8 @@ Legend: `[ ]` open · `[~]` partially done
   label. Discovery is shallow and asynchronous; invalid/unreadable metadata is
   skipped, and discovery threads are cancelled/drained on page destruction.
   Selecting a source retains the preview-then-confirm, copy-only import flow.
+  Only matching JSON names need a file-type check; a case-variant directory
+  cannot hide a valid session JSON file on case-sensitive mounts.
 
 - [x] **Windows regression suite portability.** Relative ingest/image-manifest
   paths use forward slashes consistently; tests treat native absolute paths and

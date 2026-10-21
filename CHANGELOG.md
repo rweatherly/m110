@@ -73,6 +73,8 @@ changes a **user** would notice, per release.
   given one telescope's masters.
 
 ### Fixed
+- Origin source discovery avoids file-type checks for unrelated capture files
+  and ignores directories named like session JSON when choosing the metadata file.
 - Windows imports display consistent destination paths, and pooled backups handle
   the wide file IDs reported by Windows without an integer-overflow failure.
   A cloud backup address accidentally converted into Windows path syntax is

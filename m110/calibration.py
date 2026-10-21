@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import config, devices
-from .ingest import _normalize_imagetyp, _safe_segment
+from .ingest import ORIGIN_JSON_MAX_BYTES, _normalize_imagetyp, _safe_segment
 
 TIERS = config.CALIBRATION_TIERS                     # ("darks", "flats", "biases")
 _TIER_OF_KIND = {"dark": "darks", "flat": "flats", "bias": "biases"}
@@ -88,11 +88,12 @@ class MatchResult:
         return bool(self.as_dict())
 
 
-# Size limit: 1 MiB (1,048,576 bytes) for the JSON file Origin writes beside its
-# frames (a session's info.json / <stamp>_info.json, or a master's <name>.json).
-# We call it a "sidecar", as elsewhere in M110. These files are only a few KB, so
-# a larger one is treated as corrupt and ignored instead of being parsed.
-_MAX_SIDECAR_BYTES = 1 << 20
+# Size limit: 1 MiB (1,048,576 bytes), shared with ingest._origin_info, for the
+# JSON file Origin writes beside its frames (a session's info.json /
+# <stamp>_info.json, or a master's <name>.json). We call it a "sidecar", as
+# elsewhere in M110. These files are only a few KB, so a larger one is treated as
+# corrupt and ignored instead of being parsed.
+_MAX_SIDECAR_BYTES = ORIGIN_JSON_MAX_BYTES
 
 
 def _num(v, cast=float):
