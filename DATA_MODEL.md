@@ -245,6 +245,14 @@ App-bundled **reference data** (ships in the package, not in the store):
 
 ## Data catalog
 
+**Origin import sources (B5).** Source discovery is read-only and shallow: a root
+qualifies when a direct session child has `info.json` with a `StackedInfo` object.
+Metadata reads are capped at 1 MiB; malformed, oversized or inaccessible JSON is
+ignored. The Import page probes mounted roots and its existing `import_recents`
+locations in the background. Selecting a source uses the existing confirmed-copy
+writer and calibration routing below. Source discovery adds no stored format,
+store migration, or `.store_version` change.
+
 **Origin calibration (B3/B4).** Session calibration keeps the existing
 `Images/<target>/{darks,flats,biases}/` tiers. SHA-256 deduplication is scoped to a
 target and tier, including pending sessions and confirmation of stale plans.

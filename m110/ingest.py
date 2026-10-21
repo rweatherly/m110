@@ -658,13 +658,17 @@ _ORIGIN_TRAILING_DESIGNATION_RE = re.compile(
 
 
 def _origin_info(src_dir: Path) -> dict | None:
-    """The structured session facts from Origin's ``info.json``, if present."""
-    info_name = next((f for f in _all_files(src_dir) if f.lower() == "info.json"), None)
-    if not info_name:
-        return None
+    """Structured session facts, bounded for automatic source discovery too."""
     try:
-        payload = json.loads((src_dir / info_name).read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        info_name = next((f for f in _all_files(src_dir) if f.lower() == "info.json"), None)
+        if not info_name:
+            return None
+        with (src_dir / info_name).open("rb") as stream:
+            data = stream.read((1 << 20) + 1)  # Origin metadata is normally a few KB.
+        if len(data) > (1 << 20):
+            return None
+        payload = json.loads(data.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         return None
     stacked = payload.get("StackedInfo") if isinstance(payload, dict) else None
     return stacked if isinstance(stacked, dict) else None

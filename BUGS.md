@@ -10,6 +10,12 @@ Legend: `[ ]` open · `[~]` partially done
 
 ## Build, CI & dependencies
 
+- [x] **Origin sources missing from Import (B5).** Mounted roots and remembered
+  copies are recognized from direct-child session JSON without relying on a drive
+  label. Discovery is shallow and asynchronous; invalid/unreadable metadata is
+  skipped, and discovery threads are cancelled/drained on page destruction.
+  Selecting a source retains the preview-then-confirm, copy-only import flow.
+
 - [x] **Windows regression suite portability.** Relative ingest/image-manifest
   paths use forward slashes consistently; tests treat native absolute paths and
   file URLs as paths. The backup hash cache preserves Windows file IDs wider

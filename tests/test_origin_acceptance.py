@@ -15,7 +15,7 @@ import types
 
 import pytest
 
-from m110 import calibration, config, ingest, siril
+from m110 import calibration, config, ingest, siril, sources
 from tests._helpers import seed_root
 
 
@@ -44,6 +44,7 @@ def test_real_origin_sessions_dedup_without_changing_sources(tmp_path, monkeypat
     src = tmp_path / "source"
     shutil.copytree(sample, src / sample.name)
     shutil.copytree(sample, src / "Pacman_Nebula_-_NGC_281_2026-09-29_01-31-17")
+    assert sources.find_origin_roots([src]) == [src]
     plan = ingest.scan_directory_plan(src)
     assert not any(op.kind == "unassigned" for op in plan)
     assert len([op for op in plan if op.kind in ("dark", "flat", "bias")]) == 3
@@ -65,6 +66,7 @@ def test_real_origin_library_only_dark_is_matched_with_json_iso(tmp_path, monkey
     shared.mkdir()
     for name in ("dark0007.fits", "dark0007.json", "bias0007.fits", "flat.fits"):
         shutil.move(str(session / name), str(shared / name))
+    assert sources.find_origin_roots([src]) == [src]
     ops = ingest.scan_directory_plan(src)
     assert not any(op.kind == "unassigned" for op in ops)
     ingest.apply_ops(ops)

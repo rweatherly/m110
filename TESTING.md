@@ -255,6 +255,14 @@ routing, missing/ambiguous devices, late JSON, missing settings and mixed ISO.
 The packager's real `-PackageOnly`/recipient launcher tests remain in
 `tests/test_build_portable_windows.py`.
 
+Origin B5 coverage is in `tests/test_sources.py` and `tests/test_ui_import.py`:
+arbitrary drive labels, copied roots, multiple sources, malformed/oversized JSON,
+unreadable mounts/sessions, cancellation, standard platform mount candidates,
+and a responsive UI. Detected-source UI tests preview and confirm real copies
+with absent, empty and populated `Calibration/`; cancelling confirmation writes
+nothing, reimport is empty, and source hashes remain unchanged. Existing Seestar
+sources, Recent places and the current selection are preserved.
+
 Opt-in real-sample gates copy the named Origin and Seestar samples before import:
 
 ```powershell
@@ -262,8 +270,8 @@ $env:M110_SAMPLE_ROOT = 'C:\Users\rweat\OneDrive\Documents\GitHub\AIProjects\Ast
 .venv\Scripts\python.exe -X utf8 -m pytest -q tests/test_origin_acceptance.py
 ```
 
-They verify source hashes, two Origin sessions sharing calibration, a library-only
-dark match using the real JSON ISO, and the Seestar plan against accepted commit
+They verify Origin root discovery, source hashes, two sessions sharing calibration,
+a library-only dark match using the real JSON ISO, and the Seestar plan against accepted commit
 `81c68a1`. The real bias/flat lack ISO/GAIN evidence and must remain unmatched.
 No actual Siril stacking is claimed by this gate.
 
@@ -277,6 +285,20 @@ have been moved from its session into `Calibration/`; confirm the shared library
 paths and preparation notes. Check absent/empty Calibration and an ambiguous-device
 control. Keep originals untouched. Rob's manual acceptance remains separate from
 the automated gates and frozen-launch smoke test.
+
+Manual B5 gate: extract the branch's portable ZIP and run `run-dev.cmd` with a
+fresh `M110_DEV_ROOT` under `D:\m110-dev`. Open Import with an Origin drive/root
+mounted: after background discovery it appears as `Origin device`, regardless of
+label. Windows probes logical drives (including mapped shares); macOS probes
+`/Volumes`; Linux probes `/media/<user>`, `/run/media/<user>` and `/mnt` children.
+An unmounted copied root can be browsed once; it is then recognized from Recent
+places when Import reloads. Unconventional mount locations remain browseable.
+Selecting the source must show a preview before confirmation, with copy-only
+operations. Cancel first and verify nothing was copied, then confirm, compare
+source bytes and reimport (zero operations). Repeat with absent/empty/populated
+`Calibration/`, an unrelated root and a Seestar source. Reopen Import after
+mounting or disconnecting a drive to refresh the source list. No B6–B11 behavior
+is part of this gate.
 
 ```bash
 cd ~/Documents/Code/m110

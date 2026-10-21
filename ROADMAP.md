@@ -1014,10 +1014,10 @@ build-time only, runtime stays offline).
 
 **Origin increments:** B1 safe session import and B2 catalog target names are
 implemented. B3 content-based session calibration deduplication and B4 shared
-root-calibration import/compatible library lookup are implemented for review;
-manual acceptance is pending. All use the existing store layout. Automatic Origin
-source discovery, observing-night normalization, FILTER grouping, stack display,
-and Origin Siril/planning presets remain follow-ups (B5–B11).
+root-calibration import/compatible library lookup, plus B5 automatic Origin source
+discovery, are implemented for review; manual acceptance is pending. All use the
+existing store layout. Observing-night normalization, FILTER grouping, stack
+display, and Origin Siril/planning presets remain follow-ups (B6–B11).
 
 Record device/source per session; introduce the optional
 `Images/<target>/<device>/` path level only when one target is actually shot on

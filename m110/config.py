@@ -573,7 +573,8 @@ def _ensure_object_stubs(root: Path, internal: Path) -> None:
 
 # Where mounted volumes appear. macOS only today — a Linux user's Seestar shows up
 # under /media/<user>/ or /mnt, and Windows uses drive letters, so neither gets the
-# device source button (they can still Import → Browse… to the mount). Module-level
+# Seestar source entry (they can still Import → Browse… to the mount). Origin's
+# cross-platform mount candidates live in sources.mounted_roots. Module-level
 # so it can be pointed at a scratch dir: a telescope is *just a mounted filesystem*,
 # which is what lets the tests exercise the real probe against a fake mount instead
 # of stubbing `find_seestar_myworks` out (see `tests/_helpers.mount_seestar`).

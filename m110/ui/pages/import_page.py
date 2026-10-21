@@ -10,10 +10,12 @@ dialogs — strictly preview-then-confirm.
 """
 from __future__ import annotations
 
+import logging
 import threading
 from collections import Counter
+from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
@@ -21,7 +23,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QSplitter, QGroupBox,
 )
 
-from m110 import catalog, config, ingest
+from m110 import catalog, config, ingest, sources
 from m110.ui import theme
 from m110.ui.ingest_dialog import (
     _ScanWorker, _ApplyWorker, _fmt_size, KIND_LABEL, ASSIGNABLE_KINDS,
@@ -31,6 +33,33 @@ from m110.ui.widgets import fit_cell_widgets
 
 RECENTS_KEY = "import_recents"
 MAX_RECENTS = 8
+
+
+class _SourceWorker(QThread):
+    """Shallow JSON discovery stays off the UI thread, even on a slow mount."""
+    done = Signal(list)
+
+    def __init__(self, recents, cancel_event, parent=None):
+        super().__init__(parent)
+        self._recents = recents
+        self._cancel = cancel_event
+        if parent is not None:
+            # QObject deletes its children after emitting destroyed. Drain the
+            # thread first, including deleteLater() without a closeEvent.
+            parent.destroyed.connect(self.stop)
+
+    def stop(self):
+        self._cancel.set()
+        self.wait()
+
+    def run(self):
+        try:
+            roots = sources.mounted_roots() + [Path(p) for p in self._recents]
+            self.done.emit(sources.find_origin_roots(roots, self._cancel.is_set))
+        except ingest.IngestCancelled:
+            pass
+        except Exception:
+            logging.getLogger("m110").exception("Origin source discovery failed")
 
 
 class ImportPage(QWidget):
@@ -48,6 +77,9 @@ class ImportPage(QWidget):
         self._progress = None
         self._cancel_event = None
         self._post_import_msg = None   # confirmation shown after the post-import rescan
+        self._origin_roots = []
+        self._source_worker = None
+        self._source_cancel = threading.Event()
 
         outer = QVBoxLayout(self)
 
@@ -143,6 +175,24 @@ class ImportPage(QWidget):
             self._set_empty("Choose a folder to import from "
                             "(a device, another scope's export, or any directory).")
         self.refresh_holding()
+        if self._source_worker is None:
+            self._source_cancel = threading.Event()
+            recents = list(config.get_setting(RECENTS_KEY, []) or [])
+            self._source_worker = _SourceWorker(recents, self._source_cancel, self)
+            self._source_worker.done.connect(self._on_origin_roots)
+            self._source_worker.finished.connect(self._finish_source_worker)
+            self._source_worker.start()
+
+    def _on_origin_roots(self, roots):
+        if self.sender() is self._source_worker and not self._source_cancel.is_set():
+            self._origin_roots = roots
+            self._populate_sources()
+
+    def _finish_source_worker(self):
+        if self._source_worker is not None and self.sender() is self._source_worker:
+            self._source_worker.wait()
+            self._source_worker.deleteLater()
+            self._source_worker = None
 
     def _places(self):
         """(label, path) entries: detected device(s) + the user's recent browse
@@ -157,6 +207,8 @@ class ImportPage(QWidget):
         mw = config.find_seestar_myworks()
         if mw is not None:
             add(f"Seestar device — {mw.parent.name}", str(mw))
+        for root in self._origin_roots:
+            add(f"Origin device — {root.name or root}", str(root))
         for p in config.get_setting(RECENTS_KEY, []) or []:
             add(f"Recent — {p}", p)
         return places
@@ -865,6 +917,10 @@ class ImportPage(QWidget):
         return self._worker is not None
 
     def _stop_worker(self):
+        if self._source_worker is not None:
+            self._source_worker.stop()
+            self._source_worker.deleteLater()
+            self._source_worker = None
         if self._worker is not None:
             if self._cancel_event is not None:
                 self._cancel_event.set()
@@ -872,3 +928,7 @@ class ImportPage(QWidget):
                 self._worker.wait()
             self._worker.deleteLater()
             self._worker = None
+
+    def closeEvent(self, event):
+        self._stop_worker()
+        super().closeEvent(event)

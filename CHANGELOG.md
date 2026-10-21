@@ -11,6 +11,10 @@ changes a **user** would notice, per release.
 ## [Unreleased]
 
 ### Added
+- **Origin import sources appear automatically.** Import recognizes mounted
+  Origin roots and remembered copies by their session JSON, regardless of drive
+  label. Discovery runs in the background on Windows, macOS, and Linux; selecting
+  a source still previews first and copies only after confirmation.
 - **Origin calibration without repeated copies.** Sessions reusing identical
   calibration frames share one stored copy per target; different calibration
   bytes are kept even when filenames repeat. Shared Origin `Calibration/`
