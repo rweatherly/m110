@@ -10,6 +10,16 @@ Legend: `[ ]` open · `[~]` partially done
 
 ## Build, CI & dependencies
 
+- [ ] **Origin mosaic tiles import as one junk target per tile (B12).** A Celestron
+  Origin mosaic writes one session folder per tile (`Heart_Nebula_-_IC_1805_Tile01_…`)
+  plus an assembled `…_Mosaic_…` folder. B2's resolver never strips `_TileNN`, so each
+  tile lands in `Images/Heart Nebula - IC 1805 Tile01/` (16 coordinate-less Library
+  objects for a 4x4), calibration is copied once per tile, and the assembled stack files
+  under the plain `Sh2-190` as if it were a single-frame capture. None of the Seestar
+  mosaic handling (framings, `m110-stack` geometry) is reached. Fix: route tiles and
+  assembly to `Images/<id>_mosaic/` (spec WP13). Reproduced on `1789ba3` with real
+  Heart 4x4 / Soul 4x3 samples, 2026-10-23.
+
 - [x] **Origin sources missing from Import (B5).** Mounted roots and remembered
   copies are recognized from direct-child session JSON without relying on a drive
   label. Discovery is shallow and asynchronous; invalid/unreadable metadata is
