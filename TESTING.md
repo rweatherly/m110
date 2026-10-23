@@ -176,6 +176,7 @@ What it contains (and what each fixture exercises):
 | **`M110-test-import-source/`** (a sibling folder, also unpacked from the tar): Seestar export `M27_sub`/`m13_sub`/`M65_sub`/`M 31_mosaic_sub`/`M57/`/`Nightscape_photo/` + a `mixed_dump/` + **Dwarf 3 sessions** (`DWARF_RAW_TELE_M 1_…`, a `STARTRAILS_…` folder, a `DWARF_RAW_WIDE_Unknown_…`) | **Import → Browse…**: grouped+selectable preview; **canonicalisation** (`m13`→`M13`; the spaced Seestar mosaic `M 31_mosaic_sub`→`M31_mosaic`, one M31 in the Library afterwards); a **mis-pointed** group (`M65`→M66 ⚠ remap, #12); in-app stack + media; the dump's strays **sweep into the holding area** (6c); the **Dwarf** sessions classify `.fits` subs → lights, `stacked-16`→stack tier, startrails → Media, `Unknown` → holding (identify-by-pointing) | §2.2 |
 | **`M110-test-device-mount/`** (a sibling folder, also unpacked from the tar): `Seestar S50/MyWorks/M101_sub/` holding **every** M101 frame the device captured — *including the two the store has rejected* — plus 2 genuinely new subs; `DWARF3/Astronomy/DWARF_RAW_TELE_M 42_…` doing the same for M42 | **#110 no-re-sync**: point Import at it and only the **new** subs are offered — a rejected frame is already in the library (in the other tier) and must not come back. A telescope is just a mounted filesystem, so this directory is a faithful stand-in for one | §2.2, §2.4 |
 | `M 72` + `M 76` (Seestar S50 `S50_c0ffee00`, TELESCOP/GAIN/CCD-TEMP subs replaying 2026-10-15) + `Calibration/S50_c0ffee00/darks/` (4 **real** masters from `tests/data/seestar_darklibrary/`); the device mount adds `Seestar S50/darklibrary/20s/` (all 5) + `MyWorks/M 72_sub` | **Seestar dark library**: the never-apply guard, the Sessions **Dark** column (M 72 Δ10.5 ⚠ confirmed), Tools → Devices…, a device import offering exactly one new dark | §2.2 |
+| A second scope `S30_deadbeef` ("Travel S30" in `devices.toml`): all of M13 + a 6-frame M51 session the same night as the S50's; every synthetic Seestar sub carries `TELESCOP` | **Devices page**: three devices, a nickname from the registry, per-device objects/integration, and the same-night **session split** | §2.2 |
 
 The generator is covered by `tests/test_make_test_corpus.py`, which builds and
 self-checks a corpus on every `pytest -q` run (~1s, into a temp dir). Treat a
@@ -480,24 +481,46 @@ re-run when its area changes and you want eyes on the visuals).
 - [ ] **EPERM regression:** copying from an SMB mount succeeds (no "Operation not
       permitted").
 
-#### Seestar dark library + Tools → Devices…  ⚙ *(guard/ingest/rule v1/rollup automated — `test_seestar_darks.py`, `test_ui_devices.py`)*
+#### Seestar dark library + the Devices page  ⚙ *(guard/ingest/rule v2/rollup/page automated — `test_seestar_darks.py`, `test_devices.py`, `test_ui_devices.py`)*
 > Corpus: `M 72` and `M 76` are Seestar S50 captures (`S50_c0ffee00`) replaying a
 > real night; `Calibration/S50_c0ffee00/darks/` holds four of the five **real**
 > masters, the device mount all five.
-- [ ] **Import → Browse…** → `M110-test-device-mount/Seestar S50` (the volume, not
-      `MyWorks`): one **master darks** row, object `S50_c0ffee00`, **1** frame (the
+- [ ] **Import → Browse…** → `M110-test-device-mount/Seestar S50/MyWorks` (the folder
+      the page's **Seestar device** entry points at — the darks live *beside* it, and
+      must still be offered): one **master darks** row, object `S50_c0ffee00`, **1** frame (the
       7.7 °C master; its `.jpg` rides along), Pointing **—**, destination
       `Calibration/S50_c0ffee00/darks/`. Import it; re-browsing offers nothing.
 - [ ] M 72 detail → **Sessions**: the **Dark** column reads `24.9 °C · Δ10.5 ⚠` in the
-      warning color; hover: the master's filename, `confirmed (rule v1)`, sensor
+      warning color; hover: the master's filename, `confirmed (rule v2)`, sensor
       14.4–24.8 °C, the `--max-dark-gap` hint. M 76 reads `13.9 °C · Δ2.7` with no ⚠.
       Overview → View all sessions… has the same **Dark** column (sortable).
-- [ ] **Tools → Devices…**: heading "ZWO Seestar S50 · c0ffee00" + the never-applied
-      note; **Dark library** lists the masters with a preview icon, made time,
-      median, hot px and captures served (24.9 °C and 13.9 °C serve one each);
-      **Captures** lists M 72 + M 76; **Sensor health** draws two scatters (newest
-      master in the accent color). Check light **and** dark theme.
-- [ ] Double-click a capture → the dialog closes and the Library selects that object.
+- [ ] **Devices** (last on the rail, Ctrl+6): the list shows `ZWO Seestar S50 ·
+      c0ffee00`, `Travel S30` (nickname from the corpus `devices.toml`) and `DwarfLab
+      Dwarf 3`, most recent first. The S50's heading carries its totals + the
+      never-applied note; **Objects** lists what it shot; **Dark library** names each
+      master "Oct 15 21:52 · 13.9 °C" with a preview icon, median, hot px and captures
+      served; **Captures** lists M 72 + M 76 (plus the May targets, no dark);
+      **Sensor health** draws two scatters (newest master in the accent color). Check
+      light **and** dark theme.
+- [ ] Select the M 76 capture → the 13.9 °C dark highlights in the library; select
+      the 24.9 °C dark → M 72 highlights. The capture's Dark cell names the dark
+      exactly as the library row does.
+- [ ] Right-click a dark → **Reveal in Finder** opens Finder with that `.fit`
+      selected. Right-click a capture → reveal its dark, its lights folder, or open
+      the object.
+- [ ] Double-click a capture or an object → the Library selects that object.
+- [ ] Nickname the S50 → Save → the list and every session table's **Device** column
+      use it; Revert is enabled only while edited. Tick **Retired** → it leaves the
+      list until **Show retired**. The Dwarf shows no dark library and no Dark column.
+- [ ] M51's detail → **Sessions**: the 2026-05-20 night is **two** rows (S50 12
+      frames, Travel S30 6 frames) — two scopes, one night.
+- [ ] **Planning** shows a **Telescope** picker next to Location (three scopes known),
+      defaulting to the most recently used (the S50). Pick **DwarfLab Dwarf 3** → an
+      existing plan clears; plan a night → the start ceiling is the Dwarf's soft 80°,
+      and a saved field guide says "**Telescope:** DwarfLab Dwarf 3".
+- [ ] Devices → the S50 → **Planning**: "Use for planning" when another scope is
+      active; set Start ceiling 74° → **Save limits** → only that change is noted
+      ("Your changes to the … limits"); **Model defaults** + Save clears it.
 - [ ] M 72's `siril/` has **no** `darks/`, and `next-steps.md` carries the
       "already dark-subtracted on the device" note.
 - [ ] With your own Seestar: browse to its volume; the darks land under your unit's
@@ -633,6 +656,24 @@ re-run when its area changes and you want eyes on the visuals).
       objects that already have one are untouched (edited presets preserved). The
       **Tools → Prepare working folders** menu action does the same on demand and
       reports how many were created.
+- [ ] **Per-filter tiers + labels (#174):** an LP job's preset says
+      `"filter": "LP (Narrowband)"`, an IRCUT job `"No Filter (Broadband)"`; the
+      filter values are the same for both: roundness/wFWHM/background/star count
+      95/98/98/95 at 100–500 subs and 95 on all four above 500.
+      The corpus's Dwarf 3 capture (M42, Duo-Band) gets `"telescope": "Dwarf 3"`
+      and `"filter": "Dual-Band"`. A Dwarf target holding both
+      `Astro` and `Duo-Band` subs splits into `siril/Astro/` + `siril/Duo-Band/` by
+      the header `FILTER`, as a Seestar LP + IRCUT target already does.
+- [ ] **Ask before replacing a preset (#174):** the corpus's M101 sandbox ships an
+      old-style preset (98% × 4, broadband label on LP subs). Import the device
+      mount's two new M101 subs → after the progress dialog closes, **Update Siril
+      presets?** lists M101 with each change (`roundness: 98 → 95`, `filter: No
+      Filter (Broadband) → LP (Narrowband)`, …). **Replace selected** → the old file
+      is in `siril/presets/archive/naztronomy_smart_scope_presets.<stamp>.json` and
+      the new one is in place. Repeat with **Keep existing** (or closing the window)
+      on a fresh corpus → the file is untouched, and a second import with no new
+      tier crossed does **not** ask again.
+- [ ] An import that changes no preset shows no dialog at all.
 
 **Import finished work**
 - [ ] Simulate Siril: drop a `*_processed.png` and a `*_processed.fit` into
@@ -641,10 +682,12 @@ re-run when its area changes and you want eyes on the visuals).
       render (→ `finished/`) and stack (→ `stacks/`) checked, intermediates absent;
       a **hero** picker lists the raster(s); a **cleanup** choice is offered.
 - [ ] Import (cleanup = *archive*) → render shows in the gallery, the chosen hero
-      becomes the hero; the run's output + intermediates (incl. Siril's `process/`)
-      are **moved** into a visible `siril/[<FILTER>/]archive/<timestamp>/`
-      (nothing deleted), while `lights/` + `presets/` stay so the sandbox is ready
-      for another run. `Images/<target>/lights/` originals are untouched.
+      becomes the hero; the run's output + intermediates are **moved** into a
+      visible `siril/[<FILTER>/]archive/<timestamp>/` (nothing deleted), while
+      `lights/` + `presets/` stay so the sandbox is ready for another run — and so
+      does Siril's `process/` scratch, which is **not** in the new archive folder
+      (`config.SANDBOX_SCRATCH`; the next Naztronomy run asks to clear it).
+      `Images/<target>/lights/` originals are untouched.
 - [ ] **Re-import keeps the hero:** process again, import again → the hero picker
       defaults to **"Keep current (…)"**; a second `archive/<timestamp>/` appears
       alongside the first.
@@ -752,6 +795,21 @@ m110-stack "<copy>" --run
 - [ ] Ctrl-C mid-run leaves no half-written stack.
 - [ ] Three Siril runs happen, not two — `siril_stack.log` (solve),
       `siril_stack_register.log`, `siril_stack_stack.log` all appear in the working dir.
+- [ ] **An import cannot disturb a running stack.** Run this on a copy that lives
+      **inside a test store** (so M110 can see it), with some finished output in the
+      sandbox. While it runs, `ls -a` the working dir: `.m110-stack.running` is there.
+      In M110, open *Import finished work* for that object: it must say *"A stack is
+      running in this sandbox — wait for it to finish"* with **Import** disabled, and
+      `process/` must stay put. After the run ends (success, failure or Ctrl-C) the
+      marker is gone and the import works again. `kill -9` a run: the leftover
+      marker must not block the next import (its pid is dead, so it is ignored and
+      removed).
+- [ ] Start a second `m110-stack --run` on the same folder while one is running: it
+      refuses (*"Not starting a second run in the same folder"*) and the first run
+      carries on.
+- [ ] Siril GUI run (no marker): run the Naztronomy script on a sandbox and open
+      *Import finished work* while it works. The dialog warns *"Siril may still be
+      working here"* and the clean-up defaults to *Leave the sandbox as-is*.
 
 **A partial plate solve** — the case that used to lose the whole run. Hard to force
 on purpose; if a real set doesn't produce one, the orchestration is covered by
@@ -890,7 +948,10 @@ hdiutil attach /tmp/m110test.dmg          # mounts at /Volumes/M110TEST
       confirm the destination's used space didn't roughly double.
 - [ ] **A sandbox's work is backed up; its links are not.** In the first snapshot,
       open `Images/M101/siril/`: `archive/20260701-214500/` is there with its four
-      intermediates, `presets/` and `next-steps.md` are there — and `lights/` is **not**.
+      intermediates, `presets/` and `next-steps.md` are there — and `lights/` is **not**,
+      nor is Siril's `process/` scratch, either at `siril/process/` or inside
+      `archive/20260701-214500/process/` (`config.SANDBOX_SCRATCH`; both are in the
+      corpus, so their absence is the rule working, at both tiers).
       Then confirm `Images/M101/lights/` *is* there with all 18 subs. This is the whole
       rule (`config.SANDBOX_LINKED_INPUTS`): the frames are backed up once, under the
       path they really live at, while the hand-work beside them is kept. Getting it

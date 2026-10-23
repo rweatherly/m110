@@ -16,7 +16,7 @@ catalog, track, ingest, and process-prep a smart-telescope deep-sky collection.
 | # | Milestone | Status | Detail |
 |---|---|---|---|
 | — | **MVP v0.1 — "the Library"** (catalog, ingest, rendering, processing-prep, two-axis store) | ✅ shipped | [`DONE.md`](DONE.md) |
-| 0 | **Navigation IA** — 5-pane rail (Library · Overview · Planning · Import · Processing) | ✅ shipped | [`DONE.md`](DONE.md), [`UI_ROADMAP.md`](UI_ROADMAP.md) |
+| 0 | **Navigation IA** — 6-pane rail (Library · Overview · Planning · Import · Processing · Devices) | ✅ shipped | [`DONE.md`](DONE.md), [`UI_ROADMAP.md`](UI_ROADMAP.md) |
 | — | **UI design system** — tokens, light/dark theming, restyled surfaces, branding | ✅ shipped | [`DONE.md`](DONE.md), [`UI_ROADMAP.md`](UI_ROADMAP.md) |
 | 1 | **Session planning** — site profiles + light-dome glow, deterministic prioritizer, night planner + sequencer, field guides | ✅ shipped *(follow-up refinements open [↓](#1--session-planning-follow-ups-non-blocking-refinements))* | [`DONE.md`](DONE.md) Checkpoints A/B + tuning arc; [`docs-archive/PLANNING_ROADMAP.md`](docs-archive/PLANNING_ROADMAP.md) |
 | 5 | **Library, catalogs & goals** — multi-list tracking, 6 bundled catalogs, custom goals | ✅ shipped *(catalog growth open [↓](#5--catalog-growth))* | [`DONE.md`](DONE.md) |
@@ -33,6 +33,79 @@ catalog, track, ingest, and process-prep a smart-telescope deep-sky collection.
 | 13 | **Image annotation** (plate-solved object overlays; needs ASTAP) | ⬜ open — scoped, agreed with upstream ([#98](https://github.com/mjm1138/m110/issues/98)) | [↓](#13--image-annotation-plate-solved-object-overlays) |
 | 9 | **Import triage toolkit** (header inspector, plate-solving) | ⬜ deferred | [↓](#9--full-import-triage-toolkit-deferred) |
 | 3 | **Equipment monitor** | 💤 deprioritized (vision revised) | [↓](#3--equipment-monitor-deprioritized) |
+
+---
+
+## 1.0 release criteria
+
+*Drafted 2026-10-22.* **1.0 is a stability promise, not a feature milestone.** The
+feature surface is already there: everything ✅ above, including session planning,
+which the original beta plan had deferred until after beta. What 1.0 adds is a
+commitment: a store you can upgrade and restore across without loss, shipped flows
+that give correct output, and installers verified on every platform we ship. So the
+gate is a hardening list plus a freeze, not more milestones.
+
+### The freeze
+
+- Once 0.3.0-beta.9 is cut, the next cycle is a **freeze**: the blockers below and
+  regression fixes only. No new rail pages, no new top-level store directories, no
+  `.store_version` bump.
+- Tag 1.0 after **one or two consecutive betas with no store-shape change** and no
+  open blocker.
+- **Draco does not gate 1.0.** Device-level calibration on `main` is additive, and the
+  header-stamp shim lives only on `feature/draco`. But Draco work must not land store
+  changes during the freeze; it ships in 1.x.
+
+### Blockers
+
+Each one points at its full entry in [`BUGS.md`](BUGS.md).
+
+**Data safety**
+- [ ] **#40d — Restore has no store-version gate** *(Backup & restore)*. Restoring an
+  older snapshot into a newer store must migrate it or refuse. Highest priority:
+  1.0 implicitly promises that your data survives an upgrade.
+- [ ] **No user-facing way to merge or rename a capture target** *(Import)*. A
+  mis-filed capture has no way out today. That's a hole in the data model, not polish.
+
+**Correctness of shipped flows**
+- [ ] **A library re-match leaves the previous master linked in a Siril job**
+  *(Processing)*.
+- [ ] **The library flat is matched per target, not per filter job** *(Processing)*.
+  Both give wrong output in device-library calibration, which landed after
+  0.3.0-beta.8.
+
+**Supportability**
+- [ ] **A failed stack's log is destroyed by the next attempt** *(Processing)*. Beta
+  reports need that log.
+
+**Security & release integrity**
+- [ ] **F8 — pin `uranometria`** to a SHA or tag *(Security)*. BUGS rates it Medium
+  once packaged builds install it the same way, and `release.yml` now does (the Linux
+  and Windows jobs), so the trigger has fired. One line in each of `ci.yml` and
+  `release.yml`.
+- [ ] **F9 — guard `objects.write_journal` at the writer** *(Security)*. Latent and
+  cheap; same shape as the fixed F1.
+- [ ] **`release.py` smoke phase can watch the wrong run** *(Packaging & release)*. It
+  has to fail closed before a 1.0 tag relies on it.
+
+**Platform QE**
+- [ ] **Smoke-test the packaged installers on real hardware for all three platforms**,
+  recorded in [`TESTING.md`](TESTING.md): the notarized macOS `.dmg`, the Linux
+  AppImage on an x86_64 desktop distro (so far only a from-source ARM run on a Pi 5 is
+  confirmed), and the Windows installer on a real Windows machine.
+
+### Explicitly not 1.0
+
+Items **2, 9, 11, 12c–e, 13, 15**, assistant **M1/M2**, the N-destination backup list,
+publishing targets beyond GitHub Pages, **#18**, **#21** refinements and **#45**
+guidance all land in 1.x. None is a promise 1.0 makes.
+
+### Open questions
+
+- **Windows code signing.** The beta decision was "ship unsigned, revisit on uptake."
+  Does the 1.0 label change that?
+- **Is there enough feedback?** Is beta usage broad enough to call the surface
+  validated, or should the freeze cycle recruit more testers?
 
 ---
 
@@ -546,7 +619,12 @@ output stops at the field guide, which is unaffected.
 
 **Permission requested 2026-09-28** — asked ZWO whether a supported plan-import
 interface already exists or is planned and, if not, whether they would publish
-one or grant written permission on terms they set. Awaiting a reply.
+one or grant written permission on terms they set. **No substantive reply (as of
+2026-10-19):** ZWO sent only an automated acknowledgement (ticket 61063) and,
+days later, a satisfaction survey — the ticket appears to have been closed
+without an answer. That is silence, not a refusal, so 2b stays shelved on the
+same terms as above. A possible next step is a neutral question on ZWO's user
+forum asking whether a documented plan format is on the Seestar roadmap.
 
 **2c — Dwarf plan hand-off** — *surveyed 2026-09-29; same deferral as the SSC
 option above.* The equivalent question for DwarfLab, asked because the answer
@@ -1046,9 +1124,9 @@ remaining device-source gaps collect here:
   see [`DONE.md`](DONE.md)): `darklibrary/` imports into `Calibration/<S50_serial>/darks/`,
   the never-re-apply guard (`devices.darks_applied_on_device`), per-session capture
   facts + the inferred on-device dark and its temperature gap (rule v1; `m110-stack
-  --max-dark-gap`), and Tools → Devices… (library, captures, sensor health). This is
-  also the first per-session device record (`telescop` on every session row) — the
-  registry + `Images/<target>/<device>/` level above are still open. Follow-ups:
+  --max-dark-gap`), and a Devices view (library, captures, sensor health). This is
+  also the first per-session device record (`telescop` on every session row).
+  Follow-ups:
   - **Confirm the trigger rule on the device** — a controlled two-target plan at
     dusk (≥2.5 °C vs ≈1.5 °C of cooling between targets); rule v1's ≈2 °C threshold
     and "nearest dark, held for the run" are inferred from three nights, not
@@ -1060,6 +1138,42 @@ remaining device-source gaps collect here:
   - **Re-darking** (research): `sub + D_applied − D_matched` took a real 13.9 °C
     M 72 sub's hot-pixel residue from −142 to −8 ADU. Opt-in, sandbox-only, never
     `lights/`; needs the device's subtraction model confirmed first.
+  - **Open questions** (from the 2026-10-18 analysis; none blocks slice 1):
+    - *Does the firmware prune old darks?* If it does, M110's copy is the only
+      lasting record — the archive then matters more, and the Devices view should
+      say which masters are gone from the device.
+    - ~~*Does the device re-pick the nearest dark per frame or once per target
+      run?*~~ **Answered 2026-10-19 — neither: a sticky window.** It switches
+      mid-run, but only once the sensor is ≈2.5 °C off the dark in use, and only to
+      a dark within ≈2.5 °C; otherwise it keeps the current one. Shipped as **rule
+      v2** (`calibration.applied_darks`; DONE.md). Still open: switch *timing* is
+      matched to within a few minutes (the window fits anywhere in 2.4–2.6 °C, and
+      the device may decide on a smoothed or periodically sampled temperature) —
+      three observed switches can't pin it closer; more cooling runs would.
+    - *S30 / S30 Pro:* `devices.darks_applied_on_device` assumes they dark-subtract
+      on-device like the S50 (same ZWO pipeline) — unmeasured. If wrong, those users
+      silently lose dark calibration. Verify with one S30 sub + master (the same
+      hot-pixel check as the S50).
+    - *Which firmware / app version introduced the dark library?* Unknown; record it
+      so "subs before the library" can be dated and the S30 question scoped.
+    - *A real `m110-stack` run on a Seestar target* (needs Siril) — slice 1's
+      proposal was validated header-only (`build_plan`), not end to end.
+- **Devices as first-class — shipped 2026-10-21** (`feature/devices-page`): a
+  **Devices** rail page (replacing the Tools dialog); the **registry**
+  `devices.toml` (nickname, retired, model override — devices themselves are
+  discovered); sessions **split by device** (two scopes on one target/night/exposure
+  were one merged row); **per-device integration** (`totals.json` `by_device` per
+  object and folder; per-device totals + objects in `devices.json`); darks named
+  alike in both tables with cross-selection; Reveal selects the file. **Planning
+  uses the device** (`feature/planning-device`, same day): the active telescope
+  (per user, like the active site; default = most recently used) supplies the night
+  plan's start ceiling / exposure limits — its preset + per-device overrides edited
+  on the Devices page — and plans and field guides name it; the orphaned
+  `profiles/device.toml` is now only a fallback and no longer lists as a site.
+  Next: **per-object integration targets** (item 1 follow-up), which read
+  `by_device`. Still open: the
+  `Images/<target>/<device>/` path level (+ migration), and telling two Dwarf 3s
+  apart (their TELESCOP is the model string; needs `MACADDR`).
 - **`Restacked/` (Mega Stack)** → the device-stack tier.
 - **TIFF subs** (a Dwarf 3 capture option; today only FITS subs are handled).
 - **`shotsInfo.json` sidecar** — RA/DEC + target + exposure/gain + IR-filter +
@@ -1098,7 +1212,8 @@ when extending an existing subsystem).
 
 - **MVP v0.1 — "the Library"** — 0.1a–0.1f, own data root + bootstrap, the
   image-rendering port, the two-axis store (#13), the processing-prep round-trip.
-- **0 — Navigation IA** — the 5-pane nav rail after the pre-launch 8→4 cleanup
+- **0 — Navigation IA** — the nav rail after the pre-launch 8→4 cleanup (Devices
+  added 2026-10-21 as the sixth pane)
   (Overview merged Summary+Goals; Media/Journal/Sessions absorbed into Library);
   Planning added post-beta. **Media brought up to parity** (`feature/media-first-class`):
   its own List/Grid views swapped into the Library's view segment, a detail pane,

@@ -74,6 +74,24 @@ Legend: `[ ]` open · `[~]` partially done
 
 ## Processing & curation UX  *(→ ROADMAP item 7)*
 
+- [x] **An import mid-stack swept the running stack's scratch into the archive**
+  (done — `feature/stack-in-progress-guard`). 2026-10-20, M1: *Import finished
+  work* ran while `m110-stack --run` was between its plate-solve and registration
+  phases. `roundtrip.archive_run` moved every child of the job dir that
+  `archive_keep` doesn't protect, which included the live `process/` (3.5 GB, the
+  solved `bkg_pp_lights_` sequence) and the open `siril_stack.log`. Phase 2 failed
+  with Siril's *"No sequence `bkg_pp_lights_' found"* and m110-stack said only
+  *"Registration failed (exit 1)"*. No data was lost. The same hazard applied to a
+  Siril GUI run. Fix: `m110-stack --run` writes `.m110-stack.running` (pid, host,
+  start time, phase) for the whole run; `roundtrip.require_idle` makes
+  `apply_import`/`archive_run` raise `StackInProgress` before any write;
+  `autoprep` (both workflows) and `prune_rejected` skip the target via
+  `roundtrip.sandbox_busy`, which also counts `process/` written in the last
+  5 min (the Siril GUI heuristic); the import dialog refuses up front, and warns
+  plus defaults cleanup to *Leave as-is* on recent scratch activity; a phase whose
+  input sequence vanished says so (`stacking.scratch_lost`).
+  `tests/test_stack_in_progress.py`.
+
 - [x] **Siril prep linked calibration frames where a mixed-filter job never
   looks** (done — `feature/calibration-library`, ported from `feature/draco`).
   `plan_prep` hardlinked darks/flats/biases once, at the sandbox root, while the
@@ -250,7 +268,13 @@ Legend: `[ ]` open · `[~]` partially done
   is retention (keeping every log forever on a target that is re-stacked often is
   its own mess) and whether a *successful* run's log is worth keeping at all.
 
-- [ ] **Siril's converted-sequence cube is backed up as authored work.** The
+- [x] **Siril's converted-sequence cube is backed up as authored work.**
+  *(done 2026-10-20, `feature/scratch-out-of-archives`)* The structural signal
+  turned up: `lights.fit` sits in `archive/<ts>/process/`, not loose beside the
+  output — the archive sweep had filed Siril's whole `process/` scratch with each
+  run. `archive_run` now leaves `process/` at the job root, and `backup.scope`
+  skips it live and archived at every tier (`config.SANDBOX_SCRATCH`; measured
+  27 GB live + 14 GB archived). Original report: The
   narrowed scope above keeps everything in a sandbox that isn't a declared link
   tree, which sweeps in `lights.fit` — Siril's single-file conversion of the
   sequence, pure scratch, fully regenerable from frames the backup already has.
@@ -381,6 +405,16 @@ Legend: `[ ]` open · `[~]` partially done
   Related: `Images/M81/` has 327 lights and no `stacks/` tier at all, so it reads
   `not_processed` while its stack lives in the combined folder. Needs a user-facing
   reconcile/"move to the right target" flow, not a silent rule.
+  *Reconciled by hand 2026-10-21 (from the Astronomy session).* By **pointing**, the
+  `OBJECT = 'M 81'` LP subs in both folders are the combined framing (Dec 69.15–69.18°), so
+  "M81-only by header" holds for `OBJECT` only. Pointing is the signal a reconcile flow
+  should use. All 221 LP subs in `Images/M81/lights` were combined framing: the 111 that
+  duplicated `M81 M82/lights` byte-for-byte were trashed, and the other 110 were moved into
+  `M81 M82/lights` (hardlinked into `siril/LP/lights` and `astrowizard/lights`). `M81/`
+  now holds only its 106 genuinely M81-centred IRCUT subs (Dec 68.95°). Left behind:
+  `M81/siril/LP/` (a stale job whose `lights/` still hardlinks the moved frames, plus an
+  `M_81_120x10sec…_og.fit` stack built from them). The duplicates show that `m81`'s
+  object rollup had been counting those 111 frames twice.
 
 - [ ] **Directory precedence outranks the stack `DATE` — should it?** Follow-up to the
   mtime→`DATE` selection fix (`feature/stack-date-selection`, see DONE.md).
@@ -590,6 +624,30 @@ Legend: `[ ]` open · `[~]` partially done
 ---
 
 ## Import
+
+- [x] **Launch crashed on the first run after upgrading to the Devices page**
+  (done — `fix/devices-page-old-rollup`). `MainWindow` builds the Devices page —
+  which reads `derived/devices.json` — before the launch Sync regenerates it, so the
+  first launch read the *previous* version's rollup (no `totals` key, from #169) and
+  `d["totals"]` raised `KeyError`. Every test built its fixture with the new schema.
+  Fix: `derived.load_devices` passes each entry through `normalize_device` (defaults
+  for every key readers use; entries with no device key dropped), and the page
+  normalizes injected data the same way. The rule this records: **a derived file is
+  read before the launch Sync rewrites it, so its readers must tolerate an older
+  schema.** `tests/test_ui_devices.py::test_a_rollup_from_an_older_version_does_not_crash_launch`
+  builds the real `MainWindow` over a #169-shaped rollup (fails without the fix).
+
+- [x] **The Import page never offered the Seestar's dark library** (done —
+  `fix/import-page-darklibrary`, found on a real S50 the day after #169 merged). #169
+  taught `ingest.scan_seestar_plan` to scan the `darklibrary/` beside `MyWorks`, but
+  the Import page — the path users actually take — called `scan_directory_plan` on the
+  chosen folder (`MyWorks`), so the darks never appeared and `Calibration/` stayed
+  empty. The tests and corpus `verify()` exercised the engine helper and a
+  volume-root scan, never the page. Fix: `ingest.source_scan_roots` /
+  `scan_source_plan` (a `MyWorks` root also covers its sibling `darklibrary/`), used
+  by the page and by `scan_seestar_plan`.
+  `tests/test_ui_import.py::test_picking_the_seestar_brings_its_dark_library` drives
+  the page's own source combo (fails without the fix).
 
 - [x] **Holding-area groups collided on the leaf folder name** (done —
   `feature/calibration-library`, ported from `feature/draco`). `scan_directory_plan`

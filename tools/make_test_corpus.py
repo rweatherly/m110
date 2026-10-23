@@ -34,7 +34,9 @@ small rendered PNGs) that exercises the whole app:
   * **M101 mid-rejection** (#110): a sandbox hardlinking all 18 subs, built *before*
         two of them were moved to `rejected/` → ships with stale links the first
         refresh must prune (`processing.reconcile_rejected`), and with integration
-        already excluding the pair
+        already excluding the pair; its preset is the pre-#174 kind (98% × 4,
+        broadband label on LP), so importing the device mount's new M101 subs
+        raises the "Update Siril presets?" dialog
   * a **fake mounted telescope** shipped beside the store (Seestar `MyWorks/` +
         Dwarf `Astronomy/DWARF_RAW_*`) holding M101/M42's frames *including the
         rejected ones* plus a couple of genuinely new subs → re-import must offer
@@ -68,6 +70,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import json
 import os
 import shutil
 import tarfile
@@ -78,7 +81,7 @@ import numpy as np
 from astropy.io import fits
 from PIL import Image
 
-from m110 import config, catalog, objects
+from m110 import config, catalog, objects, siril
 
 
 # ── synthetic media helpers ──────────────────────────────────────────────────
@@ -98,11 +101,13 @@ def _blob(size: int = 72, seed: int = 0) -> np.ndarray:
 
 
 def _fits(path: Path, obj: str, ra: float, dec: float,
-          exp: float, filt: str, when: datetime, seed: int):
+          exp: float, filt: str, when: datetime, seed: int, telescop: str | None = None):
     path.parent.mkdir(parents=True, exist_ok=True)
     hdu = fits.PrimaryHDU(data=_blob(seed=seed))
     h = hdu.header
     h["OBJECT"] = obj
+    if telescop:
+        h["TELESCOP"] = telescop
     h["FILTER"] = filt
     h["EXPTIME"] = exp
     h["DATE-OBS"] = when.strftime("%Y-%m-%dT%H:%M:%S")
@@ -150,16 +155,19 @@ def _png(path: Path, seed: int = 0):
 
 
 def _lights(folder: str, obj: str, ra: float, dec: float, exp: int, filt: str,
-            start: datetime, n: int, seed0: int, kind: str = "Light"):
-    """Write n light subs into Images/<folder>/lights/ (Seestar filename form).
-    Returns the filenames, in capture order."""
+            start: datetime, n: int, seed0: int, kind: str = "Light",
+            telescop: str | None = None):
+    """Write n light subs into Images/<folder>/lights/ (Seestar filename form),
+    shot by the corpus S50 unless `telescop` names another. Returns the
+    filenames, in capture order."""
+    telescop = telescop or S50_TELESCOP
     d = config.lights_dir(folder)
     names = []
     for i in range(n):
         when = start + timedelta(seconds=21 * i)
         name = (f"{kind}_{obj}_{exp}s_{filt}_"
                 f"{when.strftime('%Y%m%d-%H%M%S')}.fit")
-        _fits(d / name, obj, ra, dec, exp, filt, when, seed0 + i)
+        _fits(d / name, obj, ra, dec, exp, filt, when, seed0 + i, telescop)
         names.append(name)
     return names
 
@@ -223,6 +231,8 @@ def _dwarf_stack(folder: str, obj: str, ra: float, dec: float, n: int, exp: int,
 
 SEESTAR_DARKS = Path(__file__).resolve().parent.parent / "tests" / "data" / "seestar_darklibrary"
 S50_TELESCOP = "S50_c0ffee00"          # a fake unit serial (the real masters carry none)
+S30_TELESCOP = "S30_deadbeef"          # a second scope — M13 + one M51 night (Devices page)
+S30_NICKNAME = "Travel S30"            # shipped in devices.toml → the registry demo
 S50_STORE_DARKS = ("24.9C", "13.9C", "10.5C", "23.2C")   # the mount adds the 7.7C one
 
 
@@ -295,8 +305,14 @@ def _prebuilt_sandbox(folder: str, names: list[str]):
             shutil.copyfile(src, dst)
     presets = config.siril_dir(folder) / "presets"
     presets.mkdir(exist_ok=True)
-    (presets / "naztronomy_smart_scope_presets.json").write_text(
-        '{"_note": "synthetic preset for testing"}\n')
+    # The preset M110 wrote before #174: one percentage for all four filters and
+    # the broadband label even on LP subs. It differs from today's proposal, so the
+    # next import into this folder (the device mount's new subs) asks whether to
+    # replace it — the tester's way to see that dialog.
+    legacy = {**siril.default_preset(len(names), "LP"), "filter": "No Filter (Broadband)",
+              "roundness": 98.0, "fwhm": 98.0, "star_count_filter": 98.0,
+              "bg_filter": 98.0}
+    (presets / siril.PRESET_NAME).write_text(json.dumps(legacy, indent=4) + "\n")
     (config.siril_dir(folder) / "next-steps.md").write_text(
         "# Next steps\n\nSynthetic sandbox (pre-dates the rejection).\n")
     # An archived past run. Backups keep this and skip the lights/ links beside it
@@ -311,6 +327,21 @@ def _prebuilt_sandbox(folder: str, names: list[str]):
             f"synthetic archived {stage} intermediate\n")
     (run / f"starless_{folder}_120x30sec_stretch.fit").write_text(
         "synthetic archived starless intermediate\n")
+    # Siril's `process/` scratch, twice: inside that archived run (where
+    # `archive_run` filed it before it learned to leave scratch in place) and live
+    # at the job root (where it stays now). Backups skip both at every tier
+    # (`config.SANDBOX_SCRATCH`) while keeping the four intermediates above — so a
+    # tester sees the scratch rule and the authored-work rule side by side.
+    # Back-dated to the archived run (files first — writing one bumps its dir):
+    # fresh mtimes would trip `roundtrip.sandbox_busy`'s 5-minute scratch window,
+    # and autoprep would skip the folder as if Siril were still running in it.
+    past = datetime(2026, 7, 1, 21, 45).timestamp()
+    for proc in (run / "process", config.siril_dir(folder) / "process"):
+        proc.mkdir(exist_ok=True)
+        (proc / "r_pp_lights_.seq").write_text("synthetic Siril sequence\n")
+        (proc / "r_pp_lights_00001.fit").write_text("synthetic registered sub\n")
+        for p in (*proc.iterdir(), proc):
+            os.utime(p, (past, past))
 
 
 def _video(path: Path):
@@ -341,6 +372,9 @@ def build(out: Path):
 
     ra, dec = C("m51")
     _lights("M51", "M51", ra, dec, 30, "LP", base, 12, 100)
+    # the second scope on the same night, same exposure + filter → its own session
+    _lights("M51", "M51", ra, dec, 30, "LP", base + timedelta(hours=1), 6, 150,
+            telescop=S30_TELESCOP)
     _lights("M51", "M51", ra, dec, 30, "LP", base + timedelta(days=4), 10, 200)
     _seestar_stack("M51", "M51", ra, dec, 120, 30, "LP", base + timedelta(days=4, hours=2), 300)
 
@@ -406,7 +440,8 @@ def build(out: Path):
     # corpus is otherwise galaxies + nebulae; the prioritizer type-weights + the
     # Library/Planning views want a cluster).
     ra, dec = C("m13")
-    _lights("M13", "M13", ra, dec, 30, "LP", base + timedelta(days=12), 16, 5200)
+    _lights("M13", "M13", ra, dec, 30, "LP", base + timedelta(days=12), 16, 5200,
+            telescop=S30_TELESCOP)
     _seestar_stack("M13", "M13", ra, dec, 100, 30, "LP",
                    base + timedelta(days=12, hours=1), 5300)
 
@@ -519,6 +554,11 @@ def build(out: Path):
     # Refresh once so captured folders are promoted into the Library (5d: the
     # Library is the captured collection, no longer bulk-seeded from goals) and
     # derived/renders are built — i.e. the post-launch state the app would produce.
+    # The second scope has a nickname (the registry, devices.toml) — set before the
+    # refresh so derived/devices.json already carries it.
+    from m110 import devices
+    devices.save_device(S30_TELESCOP, nickname=S30_NICKNAME)
+
     from m110 import refresh
     refresh.run_refresh()
 
@@ -883,7 +923,9 @@ def verify(out: Path):
     # Seestar dark library: the mount's darklibrary/ offers only the one master the
     # store lacks, filed under the telescope named by the MyWorks subs beside it.
     from m110 import calibration, derived
-    dark_ops = [o for o in ingest.scan_directory_plan(dev / "Seestar S50")
+    # via MyWorks — the folder the Import page's Seestar entry scans — not the
+    # volume root: that is the path that once missed the darks entirely
+    dark_ops = [o for o in ingest.scan_source_plan(dev / "Seestar S50" / "MyWorks")
                 if o.kind == "cal-dark"]
     dark_fits = [o for o in dark_ops if o.src.endswith(".fit")]
     assert len(dark_fits) == 1 and "_7.7C_" in dark_fits[0].src, \
@@ -898,9 +940,24 @@ def verify(out: Path):
     assert m72["dark_temp_c"] == 24.9 and m72["dark_gap_c"] > 3 and m72["dark_link"] == "confirmed"
     assert m76["dark_temp_c"] == 13.9 and m76["dark_gap_c"] < 3 and m76["dark_link"] == "confirmed"
     (s50,) = [d for d in derived.load_devices() if d["device"] == S50_TELESCOP]
-    assert len(s50["masters"]) == len(S50_STORE_DARKS) and len(s50["captures"]) == 2
+    assert len(s50["masters"]) == len(S50_STORE_DARKS)
+    assert len([c for c in s50["captures"] if c["dark_ref"]]) == 2     # M 72 + M 76
     print(f"  Seestar darks: {len(s50['masters'])} in the library, 1 new on the device; "
           f"M 72 Δ{m72['dark_gap_c']} °C ({m72['dark_link']}), never linked into prep")
+
+    # Devices as first-class: two scopes shot M51 on the same night with the same
+    # exposure + filter → two sessions; totals split by device; the S30's nickname
+    # comes from the registry.
+    first_night = min(r["date"] for r in sessions if r["object_dir"] == "M51")
+    split = {r["device"]: r["frames"] for r in sessions
+             if r["object_dir"] == "M51" and r["date"] == first_night}
+    assert split == {S50_TELESCOP: 12, S30_TELESCOP: 6}, f"M51 night not split: {split}"
+    by_dev = derived.load_totals()["by_slug"]["m51"]["by_device"]
+    assert set(by_dev) == {S50_TELESCOP, S30_TELESCOP}, by_dev
+    (s30,) = [d for d in derived.load_devices() if d["device"] == S30_TELESCOP]
+    assert s30["label"] == S30_NICKNAME and {o["slug"] for o in s30["objects"]} == {"m13", "m51"}
+    print(f"  devices: {[d['label'] for d in derived.load_devices()]} · M51 "
+          f"{first_night} split {split}")
 
     # Phase 5 (5d): Caldwell goal active; the Library is the captured collection
     # (only *captured* Caldwell members land here, not the whole catalog), and the
@@ -934,6 +991,22 @@ def verify(out: Path):
     assert "._M63_119x30sec_processed.png" not in m63, "._ render in the gallery"
     print(f"  #161: {len(planted)} AppleDouble sidecars planted, none visible "
           f"(sessions/profile/prep/gallery)")
+
+    # Siril scratch stays out of every backup tier, live or archived, while the
+    # archived run's own intermediates are kept (`config.SANDBOX_SCRATCH`).
+    from m110.backup import scope
+    backed = set(scope.iter_source_files(out))
+    for t in ("M101", "M106"):
+        sb = f"Images/{t}/siril"
+        run = f"{sb}/archive/20260701-214500"
+        assert (out / sb / "process").is_dir() and (out / run / "process").is_dir(), \
+            f"{t}: the corpus should ship live + archived Siril scratch"
+        assert any(r.startswith(run + "/") for r in backed), \
+            f"{t}: the archived run's intermediates must be backed up"
+        assert not any(r.startswith(sb + "/") and "/process/" in r for r in backed), \
+            f"{t}: Siril's process/ scratch leaked into the backup scope"
+    print("  scratch: M101/M106 siril/process/ + archive/<ts>/process/ skipped by "
+          "backup; the archived intermediates kept")
 
 
 def make_tar(paths, tar_path: Path):
@@ -979,8 +1052,8 @@ def main():
           f"(classifies + sweeps strays to the Holding area panel)")
     print(f"  # and  Import → Browse… → ~/Documents/{device.name}/'Seestar S50'/MyWorks  "
           f"(#110: only the 2 new subs are offered — the rejected pair is withheld)")
-    print(f"  # and  Import → Browse… → ~/Documents/{device.name}/'Seestar S50'  "
-          f"(the dark library: one new master dark → Calibration/{S50_TELESCOP}/darks/)")
+    print(f"  #      (the same MyWorks also offers the darklibrary/ beside it: one new "
+          f"master dark → Calibration/{S50_TELESCOP}/darks/)")
     print("  # and  Tools → Devices…  (dark library, captures with their dark gap, sensor health)")
 
 

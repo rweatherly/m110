@@ -46,6 +46,14 @@ def test_generator_builds_and_verifies_a_corpus(tmp_path, capsys):
     # `verify` asserts its own invariants and raises on any mismatch.
     gen.verify(out)
 
+    # #174: M101's shipped preset is the pre-#174 kind, so the next prep reports it
+    # (that is the dialog a tester sees on importing the mount's new M101 subs).
+    from m110 import siril
+    [conflict] = siril.autoprep(["M101"])["preset_conflicts"]
+    assert ("filter", "No Filter (Broadband)", "LP (Narrowband)") in conflict.changes
+    m42 = siril.plan_prep("M42").jobs[0].preset          # the Dwarf 3 capture
+    assert (m42["telescope"], m42["filter"]) == ("Dwarf 3", "Dual-Band")
+
     # The two sibling fixtures the Import flows are driven from ship beside it.
     assert (tmp_path / "M110-test-import-source").is_dir()
     assert (tmp_path / "M110-test-device-mount").is_dir()
@@ -71,12 +79,14 @@ def test_harness_script_points_at_the_generator():
     # a named failure rather than deep inside a build.
     "media.list_media", "media.cleanup_candidates", "media.poster_for",
     "refresh.run_refresh", "scan_sessions.scan",
-    "ingest.scan_directory_plan", "ingest.scan_holding", "ingest.group_ops",
+    "ingest.scan_directory_plan", "ingest.scan_source_plan", "ingest.scan_holding",
+    "ingest.group_ops",
     "objects.write_journal", "objects.set_curation", "objects.get_curation",
     "siril.has_unimported_output", "siril.prune_rejected",
     "catalog.load_coords", "catalog.load_library", "catalog.load_bundled_catalog",
     "goals.set_active_goals", "goals.active_goal_ids",
-    "siril.plan_prep", "config.calibration_dir", "calibration.DARKS_ON_DEVICE_NOTE",
+    "siril.plan_prep", "siril.default_preset", "siril.PRESET_NAME",
+    "config.calibration_dir", "calibration.DARKS_ON_DEVICE_NOTE",
     "derived.load_devices",
 ])
 def test_engine_api_the_generator_depends_on(call):

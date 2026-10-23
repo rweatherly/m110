@@ -92,6 +92,7 @@ that is 86 GB → 34.5 GB, and a canvas halved on each axis.
 
 Overrides: `drizzle` (0 = off) · `pixfrac` · `rejection` · `weight` ·
 `overlap_norm` · `feather` · `no_bg_extract` · `no_filters` · `filter_pct` ·
+`filter_round` · `filter_wfwhm` · `filter_bkg` · `filter_nbstars` ·
 `only_exposure` · `exclude_night` · `filter`.
 
 `overrides_applied` echoes what you forced, and `how_to_run` grows the matching
@@ -237,11 +238,48 @@ data along with its worst.
 
 ## The one thing the per-setting justifications do not say
 
-**The quality filters compound.** Four independent thresholds at 95% do not retain
-95% — measured on NGC 7000, 904 frames registered down to 753, about 83%. The
-default is 98% because 95% was measurably too tight (it cut 21 of 231 frames on M15
-with no FWHM gain). Budget for the loss when a target is close to an integration
-goal, and reach for `no_filters` only when a set is already thin.
+**The quality filters compound.** Each percentage is the share of frames Siril
+*keeps*, ranked on that one metric over the whole set, so 95% drops the worst ~5%
+on a perfect night and on a bad one alike. All four cutoffs are computed over the
+full set and then ANDed, and they overlap less than you would hope: across six
+real stacks the combined drop was 55–90% of the four individual drops added
+together. Budget for roughly the sum.
+
+The table, by depth (the same one prep writes into the Naztronomy preset):
+
+| Depth | Roundness | wFWHM | Background | Star count |
+|---|---|---|---|---|
+| < 100 | off | off | off | off |
+| 100–500 | 95 | 98 | 98 | 95 |
+| > 500 | 95 | 95 | 95 | 95 |
+
+It was measured, not reasoned out. On M1 (767 LP subs, 732 plate-solved), three
+stacks of the same frames differed only in their filters:
+
+| Filters | Frames kept | Core SNR | Star FWHM / roundness |
+|---|---|---|---|
+| roundness 92, wFWHM 95, rest off | 675 | 27.89 | 5.076″ / 0.813 |
+| the same + background 98 | 665 | 28.12 | 5.073″ / 0.814 |
+| 95 on all four | 660 | **28.66** | 5.086″ / 0.813 |
+
+- **Roundness no tighter than 95%.** When elongation is in nearly every sub —
+  M1's stars point the same way across the field, worse at the edges, so it is
+  optics rather than wind — a tighter cut drops signal and leaves the stars as
+  they were. A target with occasional wind or tracking glitches might reward a
+  tighter cut; try `filter_round` on it rather than changing the default.
+- **Background stays on, even with a dual-band filter** (Seestar `LP`, DwarfLab
+  `Duo-Band`). wFWHM weighting scores sharpness and star count, not sky
+  brightness, so a sharp but bright-sky frame keeps full weight unless this
+  filter drops it. On M1 it was worth about 1% of SNR on its own.
+- **wFWHM is 98% on small sets**: on M15, 95% cut 21 of 231 frames with no FWHM
+  gain.
+
+A 2.7% SNR difference is worth about 5.5% more integration (SNR grows with the
+square root of time) — real, but not visible on a single pair of images.
+
+Budget for the loss when a target is close to an integration goal, loosen one
+filter with its own override rather than all four, and reach for `no_filters`
+only when a set is already thin.
 
 ## After
 

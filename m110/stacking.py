@@ -38,13 +38,14 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, asdict, fields
 from pathlib import Path
 
 import numpy as np
 
-from . import calibration, config, devices, launch, siril as siril_mod
+from . import calibration, config, devices, launch, roundtrip, siril as siril_mod
 
 PRESET_NAME = siril_mod.PRESET_NAME
 
@@ -63,10 +64,13 @@ def _fits():
     from astropy.io import fits
     return fits
 
-# Naztronomy's shipped quality-filter defaults.
-# Measured on M15: 98% kept 231 frames vs 210 at 95%, with identical FWHM —
-# the frames 95% discarded were fine. Matches Naztronomy's M15 preset.
-DEFAULT_FILTERS = {"roundness": 98.0, "fwhm": 98.0, "star_count": 98.0, "bg": 98.0}
+# The four frame-selection filters. Their thresholds come from
+# `siril.filter_quality_for` — the one table prep's preset and this stacker share
+# (#174) — keyed here on coverage depth rather than total frames, like drizzle.
+FILTER_KEYS = siril_mod.FILTER_KEYS
+# (Overrides field, filter key) for the per-filter command-line overrides.
+_FILTER_OVERRIDES = (("filter_round", "roundness"), ("filter_wfwhm", "fwhm"),
+                     ("filter_bkg", "bg"), ("filter_nbstars", "star_count"))
 
 
 # --------------------------------------------------------------------------
@@ -670,9 +674,20 @@ def build_proposal(s: Survey, gaia: Path | None, working: Path,
           "per-frame linear gradient removal before registration")
 
     # -- quality filters --------------------------------------------------
-    p.set("filters", dict(DEFAULT_FILTERS),
-          "98% thresholds on roundness, wFWHM, background and star count. 95% was "
-          "measurably too tight — it cut 21 of 231 frames on M15 with no FWHM gain")
+    dominant = _dominant_filter(s)
+    on, quality = siril_mod.filter_quality_for(s.depth_median, dominant)
+    if on:
+        p.set("filters", quality,
+              f"keep {filters_label(quality)} for a depth of {s.depth_median}. "
+              "Each cut drops that share of frames whatever the night was like, and "
+              "the four mostly add up. Measured on M1's 767 subs: 95% on all four "
+              "beat roundness 92% / wFWHM 95% by 2.7% in core SNR with stars the "
+              "same to within 0.3%. Roundness tighter than 95% only costs signal, "
+              "and background stays on even with a dual-band filter, because wFWHM "
+              "weighting does not see sky brightness")
+    else:
+        p.set("filters", None,
+              f"a depth of {s.depth_median} is too few frames to spare any")
 
     # -- compression -------------------------------------------------------
     p.set("compress", True,
@@ -806,13 +821,45 @@ def load_preset(working: Path) -> dict:
     return siril_mod._read_preset(working / "presets" / PRESET_NAME)
 
 
+def filters_label(f: dict | None) -> str:
+    """``round 95% · wFWHM 98% · bkg 98%`` — the filters that cut anything."""
+    if not f:
+        return "off"
+    on = [f"{name} {f[k]:g}%" for k, name in (("roundness", "round"), ("fwhm", "wFWHM"),
+                                               ("bg", "bkg"), ("star_count", "stars"))
+          if f.get(k, 100) < 100]
+    return " · ".join(on) or "off"
+
+
+def _dominant_filter(s: Survey) -> str:
+    return max(s.filters, key=s.filters.get) if s.filters else ""
+
+
+def apply_filter_overrides(p: Proposal, s: Survey, ov: "Overrides") -> None:
+    """--no-filters, then --filter-pct (all four), then the per-filter flags on
+    top of whatever is in force — the depth tier's values when filters were off."""
+    if ov.no_filters:
+        p.set("filters", None, "disabled on the command line")
+        return
+    if ov.filter_pct is not None:
+        p.set("filters", {k: ov.filter_pct for k in FILTER_KEYS},
+              f"all four thresholds set to {ov.filter_pct:g}% on the command line")
+    single = {k: getattr(ov, name) for name, k in _FILTER_OVERRIDES
+              if getattr(ov, name) is not None}
+    if single:
+        base = p.get("filters") or siril_mod.filter_quality_for(
+            s.depth_median, _dominant_filter(s))[1]
+        merged = {**base, **single}
+        p.set("filters", merged, f"keep {filters_label(merged)} (set on the command line)")
+
+
 def check_preset(preset: dict, s: Survey, p: Proposal) -> None:
     if not preset:
         return
-    declared = str(preset.get("filter", "")).lower()
+    declared = str(preset.get("filter", ""))
     if declared and s.filters:
-        actual = max(s.filters, key=s.filters.get)
-        if ("no filter" in declared or "broadband" in declared) and actual.upper().startswith("LP"):
+        actual = _dominant_filter(s)
+        if actual != "UNKNOWN" and (declared in siril_mod.DUAL_BAND_LABELS) != siril_mod.is_dual_band(actual):
             p.warnings.append(
                 f"The M110 preset declares filter '{preset['filter']}' but the "
                 f"frames are {actual}. That mislabels the data for SPCC."
@@ -1026,12 +1073,11 @@ def build_ssf_apply(lights_name: str, p: Proposal) -> str:
            "-filter-included"]
     if p.get("filters"):
         f = p.get("filters")
-        reg += [
-            f"-filter-round={f['roundness']}%",
-            f"-filter-wfwhm={f['fwhm']}%",
-            f"-filter-bkg={f['bg']}%",
-            f"-filter-nbstars={f['star_count']}%",
-        ]
+        # A filter at 100% keeps every frame, so it is left off the command.
+        reg += [f"-filter-{flag}={f[k]:g}%"
+                for flag, k in (("round", "roundness"), ("wfwhm", "fwhm"),
+                                ("bkg", "bg"), ("nbstars", "star_count"))
+                if f[k] < 100]
     if p.get("drizzle"):
         reg += ["-drizzle", f"-scale={p.get('drizzle_scale')}",
                 f"-pixfrac={p.get('pixfrac')}"]
@@ -1272,7 +1318,7 @@ def format_report(s: Survey, p: Proposal, siril: str, working: Path,
         ("feather", f"{p.get('feather')} px" if p.get("feather") else "off"),
         ("rgb_equal", "on" if p.get("rgb_equal") else "off"),
         ("bg extraction", "on" if p.get("bg_extract") else "off"),
-        ("quality filters", "98% round/wfwhm/bkg/stars" if p.get("filters") else "off"),
+        ("quality filters", filters_label(p.get("filters"))),
         ("compression", f"rice q{p.get('compress_quant')}" if p.get("compress") else "off"),
         ("calibration", " · ".join(
             f"{t[:-1]} {'✓' if (p.get('calibration') or {}).get(t) else '—'}"
@@ -1458,6 +1504,10 @@ class Overrides:
     no_bg_extract: bool = False
     no_filters: bool = False
     filter_pct: float | None = None
+    filter_round: float | None = None
+    filter_wfwhm: float | None = None
+    filter_bkg: float | None = None
+    filter_nbstars: float | None = None
     feather: int | None = None
     no_compress: bool = False
     compress_quant: int | None = None
@@ -1510,10 +1560,11 @@ class StackPlan:
 
 def device_dark_gaps(frames: list[Frame], geom: dict) -> dict:
     """{frame name: (gap °C, AppliedDark)} for frames from a telescope that
-    dark-subtracts on the device (calibration.applied_dark, rule v1): each target
-    run's dark is the library master nearest the run's starting temperature, and
-    a frame's gap is how far its own CCD-TEMP drifted from it. Empty when the
-    device doesn't, or its library holds no darks."""
+    dark-subtracts on the device (calibration.applied_darks, rule v2): each target
+    run starts on the library master nearest its starting temperature and switches
+    within the device's sticky window as the sensor drifts; a frame's gap is how far
+    its own CCD-TEMP sits from the dark in use for it. Empty when the device
+    doesn't, or its library holds no darks."""
     tel = geom.get("telescop")
     if not devices.darks_applied_on_device(tel):
         return {}
@@ -1524,13 +1575,12 @@ def device_dark_gaps(frames: list[Frame], geom: dict) -> dict:
     out: dict = {}
     for run in calibration.split_runs(list(by_name)):
         first = by_name[run[0]]
-        ad = calibration.applied_dark(
-            calibration.device_clock(first.name), first.temp, exptime=first.exposure,
+        used = calibration.applied_darks(
+            [(n, by_name[n].temp) for n in run], exptime=first.exposure,
             gain=first.gain, binning=first.binning, masters=masters)
-        if ad is None:
-            continue
-        for n in run:
-            out[n] = (ad.gap(by_name[n].temp), ad)
+        for n, ad in zip(run, used):
+            if ad is not None:
+                out[n] = (ad.gap(by_name[n].temp), ad)
     return out
 
 
@@ -1688,11 +1738,7 @@ def build_plan(directory, ov: Overrides | None = None, *, siril: str | None = No
         p.set("rgb_equal", True, "set on the command line")
     if ov.no_bg_extract:
         p.set("bg_extract", False, "disabled on the command line")
-    if ov.no_filters:
-        p.set("filters", None, "disabled on the command line")
-    elif ov.filter_pct is not None:
-        p.set("filters", {k: ov.filter_pct for k in DEFAULT_FILTERS},
-              f"all four thresholds set to {ov.filter_pct:g}% on the command line")
+    apply_filter_overrides(p, s, ov)
     if ov.feather:
         p.set("feather", ov.feather, "set on the command line")
     if ov.no_compress:
@@ -1999,8 +2045,12 @@ def main() -> int:
     g.add_argument("--no-bg-extract", action="store_true")
     g.add_argument("--no-filters", action="store_true")
     g.add_argument("--filter-pct", type=float, metavar="PCT",
-                   help="set all four quality-filter thresholds (default 95; "
-                        "Naztronomy's M15 preset used 98 — higher keeps more frames)")
+                   help="set all four quality-filter thresholds to PCT (the share "
+                        "of frames each keeps; default: tiered by depth and filter)")
+    for flag, name in (("round", "roundness"), ("wfwhm", "wFWHM"),
+                       ("bkg", "background"), ("nbstars", "star-count")):
+        g.add_argument(f"--filter-{flag}", type=float, metavar="PCT",
+                       help=f"set only the {name} threshold (100 = off)")
     g.add_argument("--feather", type=int, metavar="PX")
     g.add_argument("--no-compress", action="store_true")
     g.add_argument("--compress-quant", type=int, metavar="Q",
@@ -2056,6 +2106,54 @@ def main() -> int:
         return 0
 
     # ---- execute ---------------------------------------------------------
+    # The run marker is what stops an import, autoprep or prune from tidying
+    # this folder mid-run (`roundtrip.require_idle` / `sandbox_busy`): an import
+    # between phases once swept the solved scratch into archive/ and phase 2
+    # died on a sequence that was no longer there. Removed however we leave.
+    other = roundtrip.stack_in_progress(working)
+    if other:
+        print(roundtrip.describe_runs([other]) + " Not starting a second run in "
+              "the same folder: it would clear that run's scratch.",
+              file=sys.stderr)
+        return 2
+    started = time.time()
+    try:
+        roundtrip.write_run_marker(working, "starting", started)
+        return _execute(a, plan, siril,
+                        lambda ph: roundtrip.write_run_marker(working, ph, started))
+    finally:
+        roundtrip.clear_run_marker(working)
+
+
+def scratch_lost(working: Path, seq: str) -> str | None:
+    """Why a phase failed, when the reason is that its input vanished: None while
+    `process/` still holds `seq` (the sequence the previous phase produced), else
+    a plain sentence saying so — and where it went, if an archive sweep took it.
+
+    Without this the only report was Siril's "No sequence found" buried in a log
+    and "Registration failed (exit 1)", which reads as a Siril problem when the
+    real cause was M110 itself tidying the sandbox mid-run."""
+    proc = working / "process"
+    if (proc / f"{seq}.seq").exists():
+        return None
+    msg = ("process/ was moved or removed during the run — was the sandbox "
+           "imported or cleaned up?" if not proc.is_dir() else
+           f"process/ no longer holds the {seq} sequence the previous phase "
+           "produced — it was moved or removed during the run. Was the sandbox "
+           "imported or cleaned up?")
+    moved = sorted(working.glob(f"archive/*/process/{seq}.seq"))
+    if moved:
+        msg += f" It is now in {moved[-1].parent.relative_to(working).as_posix()}/."
+    return msg
+
+
+def _execute(a, plan, siril: str, mark) -> int:
+    """The `--run` half of `main`: the three Siril phases, then the rename,
+    handoff and scratch cleanup. `mark(phase)` updates the run marker."""
+    p = plan.proposal
+    working, lights, dropped = plan.working, plan.lights, plan.dropped
+    ssf_solve, ssf_reg, ssf_stack = (plan.solve_ssf, plan.register_ssf,
+                                     plan.stack_ssf)
     log_path = working / "siril_stack.log"
     heartbeat, stream = resolve_verbosity(a.verbose, a.heartbeat)
     on_raw = _printer if stream else None
@@ -2065,7 +2163,7 @@ def main() -> int:
           + (", with Siril's full output" if stream
              else " (-v, -vv, -vvv for more)") + ".\n", flush=True)
 
-    reg_seq = seq_names(lights.name, p)[1]
+    pre_seq, reg_seq = seq_names(lights.name, p)
     errors: list[str] = []
 
     if a.restack:
@@ -2085,6 +2183,7 @@ def main() -> int:
                   flush=True)
 
         # ---- phase 1: solve ----------------------------------------------
+        mark("solve")
         rc, errors = run_siril(siril, working, ssf_solve, log_path, heartbeat,
                                on_line=_printer, on_raw=on_raw)
         outcome = parse_solve_log(
@@ -2113,13 +2212,16 @@ def main() -> int:
         # ---- phase 2: apply the registration -----------------------------
         # Its own Siril invocation: phase 1 commits the registration to the .seq
         # before it aborts, so this reads it back regardless of how phase 1 ended.
+        mark("register")
         rc, errs_reg = run_siril(siril, working, ssf_reg, log_path.with_name(
             "siril_stack_register.log"), heartbeat, on_line=_printer,
             on_raw=on_raw)
         errors += errs_reg
         if rc != 0:
-            print(f"\nRegistration failed (exit {rc}). "
-                  f"Log: {log_path.with_name('siril_stack_register.log')}\n")
+            lost = scratch_lost(working, pre_seq)
+            print(f"\nRegistration failed (exit {rc})"
+                  + (f": {lost}" if lost else ".")
+                  + f" Log: {log_path.with_name('siril_stack_register.log')}\n")
             return 1
 
     # Catch empty registered frames before they kill the stack hours from now.
@@ -2130,6 +2232,11 @@ def main() -> int:
               f"normalisation cannot compute statistics on them.\n", flush=True)
         ssf_stack = build_ssf_stack(lights.name, p, drop)
 
+    # Phase 2 just wrote the registered sequence, so if it is missing now it
+    # vanished mid-run. Under --restack it only counts if it was here to begin
+    # with: nothing to reuse is a different mistake, and Siril's error says so.
+    had_reg = not a.restack or (working / "process" / f"{reg_seq}.seq").exists()
+    mark("stack")
     rc, errs2 = run_siril(siril, working, ssf_stack, log_path.with_name(
         "siril_stack_stack.log"), heartbeat, on_line=_printer, on_raw=on_raw)
     errors += errs2
@@ -2140,7 +2247,8 @@ def main() -> int:
     produced = sorted(working.glob(f"{p.get('out')}.fit*"))
     print(f"\nLog: {log_path}")
     if rc != 0 or not produced:
-        print(f"FAILED (exit {rc}). Check the log.\n")
+        lost = scratch_lost(working, reg_seq) if had_reg else None
+        print(f"FAILED (exit {rc}). " + (lost or "Check the log.") + "\n")
         return 1
     from datetime import datetime
     now = datetime.now()
