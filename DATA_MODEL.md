@@ -176,7 +176,14 @@ Default root `~/Documents/M110` (override: `M110_DATA_ROOT` env → saved prefer
                                     6d). Matching is header-only (`calibration.py`).
                                     Ingest imports another store's
                                     `Calibration/<device>/<tier>/` as itself (kinds
-                                    `cal-dark`/`cal-flat`/`cal-bias`); device-specific
+                                    `cal-dark`/`cal-flat`/`cal-bias`), including paired
+                                    `<master-stem>.json` settings. Confirmation routes
+                                    JSON to the actual retained/renamed FITS master;
+                                    existing settings are never overwritten. JSON
+                                    lookup is case-insensitive; bytes are preserved.
+                                    New masters reserve one stem across `.fit`,
+                                    `.fits` and `.json` to prevent metadata cross-talk.
+                                    Device-specific
                                     recognizers feed it. Lazily populated, additive →
                                     no .store_version bump                [immutable]
                                     **Seestar:** the device's own `<volume>/darklibrary/

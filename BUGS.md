@@ -10,6 +10,14 @@ Legend: `[ ]` open · `[~]` partially done
 
 ## Build, CI & dependencies
 
+- [x] **Origin calibration metadata and discovery (PR #2 follow-up).** Paired
+  calibration JSON follows the retained/renamed master at confirmation time,
+  including stale previews and store-to-store imports; existing settings are
+  never replaced. Case-variant JSON files are readable on case-sensitive mounts.
+  FITS/JSON stems are reserved together, including orphan JSON and directories.
+  Discovery skips individual children whose file-type check fails without losing
+  accessible siblings. Regression coverage includes independently scanned plans.
+
 - [ ] **Origin mosaic tiles import as one junk target per tile (B12).** A Celestron
   Origin mosaic writes one session folder per tile (`Heart_Nebula_-_IC_1805_Tile01_…`)
   plus an assembled `…_Mosaic_…` folder. B2's resolver never strips `_TileNN`, so each

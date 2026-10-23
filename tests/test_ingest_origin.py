@@ -321,6 +321,177 @@ def test_origin_shared_master_can_gain_its_sidecar_on_a_later_import(tmp_path, m
     assert ingest.scan_directory_plan(src) == []
 
 
+@pytest.mark.parametrize("layout", ["origin", "store"])
+@pytest.mark.parametrize("same_master", [False, True])
+def test_calibration_json_follows_master_from_independent_previews(
+        tmp_path, monkeypatch, layout, same_master):
+    """A stale preview must never give one master's ISO to another master."""
+    seed_root(tmp_path, monkeypatch)
+    suffix = Path("Calibration/RASA6F2/darks" if layout == "store" else "Calibration")
+    incoming = tmp_path / "incoming" / suffix / "dark0007.fits"
+    retained = tmp_path / "first" / suffix / ("retained.fits" if same_master else "dark0007.fits")
+    _origin_fits(incoming, "DARK")
+    incoming.with_suffix(".json").write_text('{"iso": 200}')
+    _origin_fits(retained, "DARK")
+    if not same_master:
+        with fits.open(retained, mode="update") as hdus:
+            hdus[0].header["EXPTIME"] = 30.0
+    pending = ingest.scan_directory_plan(tmp_path / "incoming")
+    first = ingest.scan_directory_plan(tmp_path / "first")
+    ingest.apply_ops(first)
+    ingest.apply_ops(pending)
+    directory = config.calibration_dir("RASA6F2", "darks")
+    if same_master:
+        master = directory / "retained.fits"
+        assert sorted(p.name for p in directory.iterdir()) == ["retained.fits", "retained.json"]
+    else:
+        master = directory / "dark0007_1.fits"
+        assert calibration.frame_facts(directory / "dark0007.fits")["iso"] is None
+        assert not (directory / "dark0007.json").exists()
+        assert calibration.frame_facts(master)["exptime"] == 15.0
+    assert calibration.frame_facts(master)["iso"] == 200
+    assert incoming.exists()          # device/store Browse imports remain copies
+    assert ingest.scan_directory_plan(tmp_path / "incoming") == []
+
+
+@pytest.mark.parametrize("late_metadata", [False, True])
+def test_store_calibration_keeps_paired_json_and_late_metadata(
+        tmp_path, monkeypatch, late_metadata):
+    seed_root(tmp_path, monkeypatch)
+    src = tmp_path / "foreign" / "Calibration" / "RASA6F2" / "darks" / "master.fits"
+    _origin_fits(src, "DARK")
+    if late_metadata:
+        ingest.apply_ops(ingest.scan_directory_plan(tmp_path / "foreign"))
+    src.with_suffix(".JSON").write_text('{"iso": 200}')
+    ops = ingest.scan_directory_plan(tmp_path / "foreign")
+    assert [Path(op.dest).name for op in ops] == (
+        ["master.json"] if late_metadata else ["master.fits", "master.json"])
+    ingest.apply_ops(ops)
+    stored = config.calibration_dir("RASA6F2", "darks") / "master.fits"
+    assert calibration.frame_facts(stored)["iso"] == 200
+    assert ingest.scan_directory_plan(tmp_path / "foreign") == []
+
+
+@pytest.mark.parametrize("layout", ["origin", "store"])
+def test_calibration_stale_json_preserves_existing_settings(tmp_path, monkeypatch, layout):
+    seed_root(tmp_path, monkeypatch)
+    suffix = Path("Calibration/RASA6F2/darks" if layout == "store" else "Calibration")
+    src = tmp_path / "source" / suffix / "dark.fits"
+    _origin_fits(src, "DARK")
+    src.with_suffix(".json").write_text('{"iso": 200}')
+    pending = ingest.scan_directory_plan(tmp_path / "source")
+    # A separate import wins confirmation first, supplying retained settings.
+    ingest.apply_ops([op for op in pending if config.is_fits_file(op.src)])
+    stored = config.calibration_dir("RASA6F2", "darks") / "dark.fits"
+    stored.with_suffix(".JSON").write_text('{"iso": 400}')
+    ingest.apply_ops(pending)
+    assert calibration.frame_facts(stored)["iso"] == 400
+    assert sorted(p.suffix.lower() for p in stored.parent.iterdir()) == [".fits", ".json"]
+
+
+def test_store_calibration_move_keeps_json_paired_after_collision(tmp_path, monkeypatch):
+    seed_root(tmp_path, monkeypatch)
+    src = tmp_path / "foreign" / "Calibration" / "RASA6F2" / "darks" / "master.fits"
+    _origin_fits(src, "DARK")
+    src.with_suffix(".json").write_text('{"iso": 200}')
+    ops = ingest.scan_directory_plan(tmp_path / "foreign", action="move")
+    stored = config.calibration_dir("RASA6F2", "darks") / "master.fits"
+    _origin_fits(stored, "DARK")
+    with fits.open(stored, mode="update") as hdus:
+        hdus[0].header["EXPTIME"] = 30.0
+    ingest.apply_ops(ops)
+    assert not src.exists()
+    assert not src.with_suffix(".json").exists()
+    assert calibration.frame_facts(stored)["iso"] is None
+    assert calibration.frame_facts(stored.with_name("master_1.fits"))["iso"] == 200
+
+
+def test_store_calibration_move_finishes_metadata_pair_when_cancelled(
+        tmp_path, monkeypatch):
+    seed_root(tmp_path, monkeypatch)
+    src = tmp_path / "foreign" / "Calibration" / "RASA6F2" / "darks" / "master.fits"
+    _origin_fits(src, "DARK")
+    src.with_suffix(".json").write_text('{"iso": 200}')
+    ops = ingest.scan_directory_plan(tmp_path / "foreign", action="move")
+    cancellation_requested = False
+
+    def progress(index, _total):
+        nonlocal cancellation_requested
+        if index == 1:
+            cancellation_requested = True
+
+    result = ingest.apply_ops(
+        ops, progress=progress, should_cancel=lambda: cancellation_requested)
+
+    stored = config.calibration_dir("RASA6F2", "darks") / "master.fits"
+    assert result == {"moved": 2, "skipped": 0, "cancelled": True}
+    assert not src.exists()
+    assert not src.with_suffix(".json").exists()
+    assert calibration.frame_facts(stored)["iso"] == 200
+    assert ingest.scan_directory_plan(tmp_path / "foreign") == []
+
+
+@pytest.mark.parametrize("stale_preview", [False, True])
+@pytest.mark.parametrize("occupied", ["json", "fit", "directory"])
+def test_calibration_new_master_does_not_claim_an_occupied_metadata_stem(
+        tmp_path, monkeypatch, stale_preview, occupied):
+    seed_root(tmp_path, monkeypatch)
+    src = tmp_path / "Origin" / "Calibration" / "master.fits"
+    _origin_fits(src, "DARK")
+    src.with_suffix(".json").write_text('{"iso": 200}')
+    if stale_preview:
+        ops = ingest.scan_directory_plan(tmp_path / "Origin")
+    directory = config.calibration_dir("RASA6F2", "darks")
+    directory.mkdir(parents=True, exist_ok=True)
+    if occupied == "json":
+        (directory / "master.json").write_text('{"iso": 400}')
+    elif occupied == "fit":
+        _origin_fits(directory / "master.fit", "DARK")
+        with fits.open(directory / "master.fit", mode="update") as hdus:
+            hdus[0].header["EXPTIME"] = 30.0
+    else:
+        (directory / "master.json").mkdir()
+    if not stale_preview:
+        ops = ingest.scan_directory_plan(tmp_path / "Origin")
+    ingest.apply_ops(ops)
+    stored = directory / "master_1.fits"
+    assert stored.is_file()
+    assert calibration.frame_facts(stored)["iso"] == 200
+    if occupied == "fit":
+        assert calibration.frame_facts(directory / "master.fit")["iso"] is None
+    if occupied == "json":
+        assert (directory / "master.json").read_text() == '{"iso": 400}'
+    assert ingest.scan_directory_plan(tmp_path / "Origin") == []
+
+
+def test_calibration_json_directory_never_creates_an_orphan_sidecar(tmp_path, monkeypatch):
+    seed_root(tmp_path, monkeypatch)
+    src = tmp_path / "Origin" / "Calibration" / "master.fits"
+    _origin_fits(src, "DARK")
+    src.with_suffix(".json").write_text('{"iso": 200}')
+    ops = ingest.scan_directory_plan(tmp_path / "Origin")
+    ingest.apply_ops([op for op in ops if config.is_fits_file(op.src)])
+    directory = config.calibration_dir("RASA6F2", "darks")
+    (directory / "master.json").mkdir()
+    result = ingest.apply_ops(ops)
+    assert result == {"moved": 0, "skipped": 2, "cancelled": False}
+    assert not (directory / "master_1.json").exists()
+    assert (directory / "master.json").is_dir()
+
+
+def test_calibration_json_without_a_retained_master_is_not_copied(tmp_path, monkeypatch):
+    seed_root(tmp_path, monkeypatch)
+    src = tmp_path / "Origin" / "Calibration" / "dark.fits"
+    _origin_fits(src, "DARK")
+    src.with_suffix(".json").write_text('{"iso": 200}')
+    ops = ingest.scan_directory_plan(tmp_path / "Origin")
+    sidecars = [op for op in ops if Path(op.src).suffix == ".json"]
+    assert len(sidecars) == 1
+    result = ingest.apply_ops(sidecars)
+    assert result == {"moved": 0, "skipped": 1, "cancelled": False}
+    assert not Path(sidecars[0].dest).exists()
+
+
 def test_origin_calibration_hashing_cancellation_leaves_no_files(tmp_path, monkeypatch):
     seed_root(tmp_path, monkeypatch)
     session = _origin_session(tmp_path, folder="Pacman_2026-09-26_21-01-08")

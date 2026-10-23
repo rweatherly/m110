@@ -252,13 +252,20 @@ Origin B3/B4 fixture coverage lives in `tests/test_ingest_origin.py` and
 `tests/test_calibration.py`: combined/separate-session imports, stale previews,
 same-name changed calibration, cancellation, target scoping, shared-library
 routing, missing/ambiguous devices, late JSON, missing settings and mixed ISO.
+PR #2 follow-up coverage includes independently scanned previews that collide or
+deduplicate under another master name, store-to-store paired JSON (including late
+arrival), move-mode pairing, retained-setting preservation and orphan prevention.
+Master names reserve their JSON stem across `.fit`/`.fits`, orphan JSON and
+directory occupants, both during preview and after a stale preview is confirmed.
+Session JSON lookup is tested with simulated case-sensitive filesystem behavior.
 The packager's real `-PackageOnly`/recipient launcher tests remain in
 `tests/test_build_portable_windows.py`.
 
 Origin B5 coverage is in `tests/test_sources.py` and `tests/test_ui_import.py`:
 arbitrary drive labels, copied roots, multiple sources, malformed/oversized JSON,
 unreadable mounts/sessions, cancellation, standard platform mount candidates,
-and a responsive UI. A case-sensitive listing fixture ensures an `INFO.JSON`
+individual child file-type errors without losing valid siblings, and a responsive
+UI. A case-sensitive listing fixture ensures an `INFO.JSON`
 directory cannot hide a valid `info.json` file, including on Windows test hosts.
 Unreadable-session injection targets `os.scandir` and checks the failed read as
 well as discovery continuing to a valid sibling. Detected-source UI tests confirm
@@ -288,6 +295,15 @@ have been moved from its session into `Calibration/`; confirm the shared library
 paths and preparation notes. Check absent/empty Calibration and an ambiguous-device
 control. Keep originals untouched. Rob's manual acceptance remains separate from
 the automated gates and frozen-launch smoke test.
+
+PR #2 follow-up manual checks (copied fixtures and an isolated store only): import
+another store's `Calibration/<device>/<tier>/` and verify paired JSON is retained.
+Leave an import preview open, import a distinct same-name master first, then
+confirm the old preview: the incoming JSON must follow the suffixed FITS, not the
+first master. Repeat with identical FITS under another filename: only the retained
+master and its matching JSON should remain. Existing JSON settings must not change.
+On a case-sensitive filesystem, uppercase session `INFO.JSON` must still supply
+ISO/binning for shared-library matching.
 
 Manual B5 gate: extract the branch's portable ZIP and run `run-dev.cmd` with a
 fresh `M110_DEV_ROOT` under `D:\m110-dev`. Open Import with an Origin drive/root

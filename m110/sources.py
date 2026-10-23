@@ -14,11 +14,19 @@ _LINUX_MOUNTS = Path("/mnt")
 
 def _directories(root: Path) -> list[Path]:
     """One level only; disconnected/inaccessible mounts are not sources."""
+    directories = []
     try:
-        return sorted((p for p in root.iterdir()
-                       if not config.is_hidden_name(p.name) and p.is_dir()), key=str)
+        for path in root.iterdir():
+            if config.is_hidden_name(path.name):
+                continue
+            try:
+                if path.is_dir():
+                    directories.append(path)
+            except OSError:
+                continue             # one broken child must not hide accessible siblings
     except OSError:
-        return []
+        pass
+    return sorted(directories, key=str)
 
 
 def mounted_roots() -> list[Path]:

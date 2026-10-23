@@ -74,6 +74,22 @@ def test_origin_discovery_continues_after_an_unreadable_root(tmp_path, monkeypat
     assert sources.find_origin_roots([broken, valid, tmp_path / "missing"]) == [valid]
 
 
+def test_origin_discovery_skips_a_child_with_an_unreadable_type(tmp_path, monkeypatch):
+    """A failed child stat must not discard all accessible siblings."""
+    broken = tmp_path / "a-offline"
+    broken.mkdir()
+    _session(tmp_path, name="b-valid")
+    original = Path.is_dir
+
+    def is_dir(path):
+        if path == broken:
+            raise PermissionError("unavailable child")
+        return original(path)
+
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+    assert sources.find_origin_roots([tmp_path]) == [tmp_path]
+
+
 def test_origin_discovery_skips_an_unreadable_session(tmp_path, monkeypatch):
     broken = _session(tmp_path, name="a-offline")
     _session(tmp_path, name="b-valid")

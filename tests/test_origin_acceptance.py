@@ -94,6 +94,7 @@ def test_real_seestar_plan_matches_accepted_main(tmp_path, monkeypatch):
         rows = []
         for op in ops:
             row = asdict(op)
+            row.setdefault("master_src", "")  # additive pairing field; Seestar stays unpaired
             for key in ("src", "dest", "dest_rel"):
                 row[key] = Path(row[key]).as_posix()
             rows.append(row)
