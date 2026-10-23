@@ -2,6 +2,7 @@
 whole library, without ever being allowed to lie."""
 import os
 import time
+from types import SimpleNamespace
 
 from m110.backup.hashcache import HashCache, hash_file
 
@@ -17,6 +18,22 @@ def test_second_lookup_is_a_hit(tmp_path):
         first = cache.sha256(f)
         second = cache.sha256(f)
     assert first == second == hash_file(f)
+
+
+def test_large_windows_file_ids_are_cached_without_losing_bits(tmp_path):
+    """NTFS file IDs may exceed SQLite's signed 64-bit INTEGER range."""
+    f = _write(tmp_path / "a.bin", b"aaaa")
+    st = f.stat()
+    facts = dict(st_size=st.st_size, st_mtime_ns=st.st_mtime_ns,
+                 st_ino=(1 << 96) + 7, st_dev=(1 << 63) + 11)
+    with HashCache(tmp_path / "cache.sqlite3") as cache:
+        first = cache.sha256(f, SimpleNamespace(**facts))
+        assert cache.sha256(f, SimpleNamespace(**facts)) == first
+        assert cache.hits == 1
+        f.write_bytes(b"bbbb")
+        facts["st_ino"] += 1
+        assert cache.sha256(f, SimpleNamespace(**facts)) != first
+        assert cache.misses == 2
 
 
 def test_any_change_to_the_stat_tuple_is_a_miss(tmp_path):

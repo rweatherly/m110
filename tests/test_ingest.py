@@ -295,7 +295,7 @@ def test_existing_files_excluded(tmp_path, monkeypatch):
     (dest / "Light_a.fit").touch()
 
     ops = ingest.scan_staging_plan()
-    names = sorted(op.src.rsplit("/", 1)[-1] for op in ops)
+    names = sorted(Path(op.src).name for op in ops)
     assert names == ["Light_b.fit"]
     assert ops[0].new_object is False  # Images/M5 already exists
 
@@ -503,7 +503,7 @@ def test_seestar_copies_stack_previews(tmp_path, monkeypatch):
     (stk / "M13_thn.jpg").write_text("t")      # device thumbnail sidecar (skip)
     monkeypatch.setattr(config, "find_seestar_myworks", lambda: myworks)
 
-    names = sorted(op.src.rsplit("/", 1)[-1] for op in ingest.scan_seestar_plan())
+    names = sorted(Path(op.src).name for op in ingest.scan_seestar_plan())
     assert "Stacked_10_M13.fit" in names
     assert "M13.jpg" in names
     assert "M13_thn.jpg" not in names

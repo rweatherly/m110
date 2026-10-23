@@ -245,6 +245,36 @@ App-bundled **reference data** (ships in the package, not in the store):
 
 ## Data catalog
 
+**Origin import sources (B5).** Source discovery is read-only and shallow: a root
+qualifies when a direct session child has `info.json` with a `StackedInfo` object.
+Metadata reads share the 1 MiB cap with calibration sidecars; malformed,
+oversized or inaccessible JSON is ignored. The Import page probes mounted roots
+and its existing `import_recents` locations in the background. Selecting a source
+uses the existing confirmed-copy
+writer and calibration routing below. Source discovery adds no stored format,
+store migration, or `.store_version` change.
+
+**Origin calibration (B3/B4).** Session calibration keeps the existing
+`Images/<target>/{darks,flats,biases}/` tiers. SHA-256 deduplication is scoped to a
+target and tier, including pending sessions and confirmation of stale plans.
+The first imported session-stamped filename is retained; changed bytes get a free
+name. Existing duplicates are never deleted. Source JSON is preserved unchanged
+in the session's device-stack tier, including its original dark/bias filenames;
+prep discovers the retained frames through the target tiers, not those source names.
+
+Root Origin `Calibration/` masters use the existing
+`Calibration/<TELESCOP>/<tier>/` library; optional paired JSON lives beside its
+master with the same stem. Device inference is permitted only from one distinct
+Origin telescope/camera identity in sibling lights. Otherwise the master is held.
+Matching keeps ISO distinct from GAIN and requires known binning and compatible
+GAIN or ISO. Stored light ISO is read from that light's session-stamped
+`seestar-stacks/<stamp>_info.json`; a shared master's ISO comes from its paired
+JSON if its header omits it. Unknown settings refuse automatic selection. These
+are additive files in existing tiers: no migration or `.store_version` change.
+
+Display/serialized relative paths (ingest destinations and image manifests) use
+forward slashes on all platforms; absolute filesystem paths retain native syntax.
+
 Lifecycle classes: **Authored** (user-owned, mutable) · **Content** (precious;
 raws immutable) · **Derived** (regenerable, disposable) · **Reference**
 (app-bundled, read-only).

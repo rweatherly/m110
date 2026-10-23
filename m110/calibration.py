@@ -32,6 +32,7 @@ makes such a target stackable with calibration.
 """
 from __future__ import annotations
 
+import json
 import re
 import statistics
 from collections import Counter
@@ -40,7 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import config, devices
-from .ingest import _normalize_imagetyp, _safe_segment
+from .ingest import ORIGIN_JSON_MAX_BYTES, _normalize_imagetyp, _safe_segment
 
 TIERS = config.CALIBRATION_TIERS                     # ("darks", "flats", "biases")
 _TIER_OF_KIND = {"dark": "darks", "flat": "flats", "bias": "biases"}
@@ -66,6 +67,8 @@ class MasterInfo:
     temp_c: float | None = None
     filter: str | None = None
     ncombine: int | None = None
+    iso: int | None = None
+    origin: bool = False
 
 
 @dataclass
@@ -85,10 +88,18 @@ class MatchResult:
         return bool(self.as_dict())
 
 
+# Size limit: 1 MiB (1,048,576 bytes), shared with ingest._origin_info, for the
+# JSON file Origin writes beside its frames (a session's info.json /
+# <stamp>_info.json, or a master's <name>.json). We call it a "sidecar", as
+# elsewhere in M110. These files are only a few KB, so a larger one is treated as
+# corrupt and ignored instead of being parsed.
+_MAX_SIDECAR_BYTES = ORIGIN_JSON_MAX_BYTES
+
+
 def _num(v, cast=float):
     try:
         return cast(v) if v is not None else None
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -105,12 +116,41 @@ def frame_facts(path) -> dict | None:
     temp = h.get("CCD-TEMP")
     if temp is None:
         temp = h.get("DET-TEMP")
+    origin = str(h.get("CREATOR") or "").lower().startswith("origin")
+    metadata: dict = {}
+    if origin:
+        p = Path(path)
+        # Session JSON stays byte-identical in the device-stack tier. The stamp
+        # pairs a stored light with its own session, never a neighbouring session.
+        stamp = re.search(r"_(\d{8}-\d{6})$", p.stem)
+        if _normalize_imagetyp(h.get("IMAGETYP")) == "light":
+            sidecar = (p.parent.parent / "seestar-stacks" / f"{stamp[1]}_info.json"
+                       if stamp else p.parent / "info.json")
+        else:
+            sidecar = p.with_suffix(".json")
+        try:
+            if sidecar.stat().st_size > _MAX_SIDECAR_BYTES:
+                raise ValueError("Origin JSON over 1 MiB; ignored")
+            data = json.loads(sidecar.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                metadata = data.get("StackedInfo", data)
+                if isinstance(metadata, dict):
+                    metadata = metadata.get("captureParams", metadata)
+                if not isinstance(metadata, dict):
+                    metadata = {}
+        except (OSError, ValueError, RecursionError):
+            pass
     return {
         "imagetyp": _normalize_imagetyp(h.get("IMAGETYP")),
         "exptime": _num(h.get("EXPTIME") if h.get("EXPTIME") is not None
                         else h.get("EXPOSURE")),
         "gain": _num(h.get("GAIN"), int),
-        "binning": _num(h.get("XBINNING"), int),
+        "binning": _num(h.get("XBINNING") if h.get("XBINNING") is not None
+                        else metadata.get("binning"), int),
+        # ISO is a separate camera setting, never a substitute numerical GAIN.
+        "iso": _num(h.get("ISO") if h.get("ISO") is not None
+                    else metadata.get("iso"), int) if origin else None,
+        "origin": origin,
         # rounded: a float32 card reads 13.8999996185303 for the 13.9 °C it means
         "temp_c": round(t, 2) if (t := _num(temp)) is not None else None,
         "filter": (str(filt).strip() or None) if filt not in (None, "") else None,
@@ -145,7 +185,8 @@ def library(device: str) -> dict[str, list[MasterInfo]]:
             masters.append(MasterInfo(
                 path=f, tier=tier, exptime=facts["exptime"], gain=facts["gain"],
                 binning=facts["binning"], temp_c=facts["temp_c"],
-                filter=facts["filter"], ncombine=facts["ncombine"]))
+                filter=facts["filter"], ncombine=facts["ncombine"],
+                iso=facts["iso"], origin=facts["origin"]))
         if masters:
             out[tier] = masters
     return out
@@ -186,10 +227,27 @@ def match_masters(facts: dict, device: str) -> MatchResult:
         res.notes.append(f"no calibration library for {device} "
                          f"(Calibration/{device}/ is empty)")
         return res
+    if not facts.get("origin") and any(m.origin for ms in lib.values() for m in ms):
+        res.notes.append("Origin masters require verified Origin capture settings; "
+                         "this caller supplied no Origin metadata")
+        return res
     exp, gain, binning = facts.get("exptime"), facts.get("gain"), facts.get("binning")
+    if facts.get("origin"):
+        iso = facts.get("iso")
+        if not binning or binning < 1 or (gain is None and (iso is None or iso <= 0)):
+            res.notes.append("Origin matching requires known binning and GAIN or ISO; "
+                             "missing settings cannot establish compatibility")
+            return res
+        # Only masters with positive evidence for the SAME setting are eligible.
+        # In particular None == None is not an Origin gain match.
+        lib = {tier: [m for m in masters if m.origin and
+                      (m.gain == gain if gain is not None else m.iso == iso)]
+               for tier, masters in lib.items()}
     temp, filt = facts.get("temp_c"), facts.get("filter")
     what = (f"{exp:g} s" if exp is not None else "? s") + \
            f", gain {gain if gain is not None else '?'}, bin {binning if binning is not None else '?'}"
+    if facts.get("origin") and gain is None:
+        what += f", ISO {facts.get('iso')}"
 
     # dark: exact exposure/gain/binning, nearest temperature — unless the device
     # already subtracted one before saving the subs (devices.darks_applied_on_device)
@@ -269,24 +327,28 @@ def facts_from_frames(frames: list[dict]) -> dict:
     than one is refused by `match_for_facts`)."""
     groups: Counter = Counter()
     for f in frames:
-        groups[(f.get("exptime"), f.get("gain"), f.get("binning"))] += 1
+        groups[(f.get("exptime"), f.get("gain"), f.get("binning"),
+                f.get("iso") if f.get("origin") else None)] += 1
     if not groups:
         return {"exptime": None, "gain": None, "binning": None, "temp_c": None,
                 "filter": None, "telescop": None, "mixed": False, "groups": {},
                 "telescopes": []}
-    (exp, gain, binning), _n = groups.most_common(1)[0]
+    (exp, gain, binning, iso), _n = groups.most_common(1)[0]
     members = [f for f in frames
-               if (f.get("exptime"), f.get("gain"), f.get("binning")) == (exp, gain, binning)]
+               if (f.get("exptime"), f.get("gain"), f.get("binning"),
+                   f.get("iso") if f.get("origin") else None) == (exp, gain, binning, iso)]
     temps = [f["temp_c"] for f in members if f.get("temp_c") is not None]
     filters = Counter(f["filter"] for f in members if f.get("filter"))
     telescop = next((f["telescop"] for f in frames if f.get("telescop")), None)
     return {
         "exptime": exp, "gain": gain, "binning": binning,
+        "iso": iso, "origin": any(f.get("origin") for f in frames),
         "temp_c": statistics.median(temps) if temps else None,
         "filter": filters.most_common(1)[0][0] if filters else None,
         "telescop": telescop,
         "mixed": len(groups) > 1,
-        "groups": {f"{k[0]}s/g{k[1]}/b{k[2]}": n for k, n in groups.items()},
+        "groups": {f"{k[0]}s/g{k[1]}/b{k[2]}" +
+                   (f"/iso{k[3]}" if k[3] is not None else ""): n for k, n in groups.items()},
         "telescopes": sorted({f["telescop"] for f in frames if f.get("telescop")}),
     }
 

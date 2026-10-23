@@ -39,7 +39,7 @@ def test_no_markdown_links_survive_and_none_of_them_dangle(built):
     docs-archive/SECURITY_ASSESSMENT.md — none of which are docs pages, so the
     obvious rewrite produced three 404s."""
     for page in built.rglob("*.html"):
-        html = page.read_text()
+        html = page.read_text(encoding="utf-8")
         # Relative only: a GitHub link to a repo file correctly ends in .md.
         assert not re.search(r'href="(?!https?://)[^":]+\.md"', html), (
             f"unrewritten .md link in {page.name}")
@@ -60,7 +60,7 @@ def test_no_markdown_links_survive_and_none_of_them_dangle(built):
 
 
 def test_a_repo_file_that_is_not_a_docs_page_links_to_github_at_this_tag(built):
-    html = (built / TAG / "changelog.html").read_text()
+    html = (built / TAG / "changelog.html").read_text(encoding="utf-8")
     assert f"https://github.com/{build_docs.REPO}/blob/{TAG}/DONE.md" in html
     assert "DONE.html" not in html
 
@@ -68,7 +68,7 @@ def test_a_repo_file_that_is_not_a_docs_page_links_to_github_at_this_tag(built):
 def test_nav_follows_the_order_the_readme_links_them_in(built):
     """The site nav is the table of contents the author already maintains, so a
     page added to docs/README.md appears without touching the builder."""
-    html = (built / TAG / "index.html").read_text()
+    html = (built / TAG / "index.html").read_text(encoding="utf-8")
     block = re.search(r"<nav>(.*?)</nav>", html, re.S).group(1)
     nav = re.findall(r'<a href="([a-z]+)\.html"', block)
     assert nav[:4] == ["index", "ingest", "library", "processing"]
@@ -87,11 +87,11 @@ def test_an_older_version_is_marked_stale_and_not_canonical(tmp_path, monkeypatc
     monkeypatch.setattr(build_docs, "SITE_DOCS", tmp_path / "docs")
     build_docs.build("v9.9.9-beta.1", quiet=True)
     build_docs.build("v0.0.1", latest=False, quiet=True)
-    old = (tmp_path / "docs" / "v0.0.1" / "index.html").read_text()
+    old = (tmp_path / "docs" / "v0.0.1" / "index.html").read_text(encoding="utf-8")
     assert "older release" in old and "/docs/latest/" in old
     assert "rel=\"canonical\"" not in old
     # …and it did not steal latest/
-    assert "v9.9.9" in (tmp_path / "docs" / "latest" / "index.html").read_text()
+    assert "v9.9.9" in (tmp_path / "docs" / "latest" / "index.html").read_text(encoding="utf-8")
 
 
 def test_the_version_index_lists_newest_first(tmp_path, monkeypatch):
@@ -99,13 +99,13 @@ def test_the_version_index_lists_newest_first(tmp_path, monkeypatch):
     for t in ("v0.1.0", "v0.3.0-beta.5", "v0.2.0"):
         build_docs.build(t, latest=False, quiet=True)
     listed = re.findall(r'<li><a href="([^"/]+)/"', 
-                        (tmp_path / "docs" / "index.html").read_text())
+                        (tmp_path / "docs" / "index.html").read_text(encoding="utf-8"))
     assert listed == ["v0.3.0-beta.5", "v0.2.0", "v0.1.0"]
 
 
 def test_the_release_script_runs_this_builder():
     """A docs site nobody rebuilds is worse than none — it goes quietly stale."""
-    src = (ROOT / "tools" / "release.py").read_text()
+    src = (ROOT / "tools" / "release.py").read_text(encoding="utf-8")
     assert '"docs"' in src and "build_docs.build" in src
     phases = re.search(r"PHASES = \[(.*?)\]", src, re.S).group(1)
     order = [p.strip().strip('"') for p in phases.replace("\n", "").split(",")]
@@ -134,9 +134,9 @@ def test_from_tag_publishes_what_that_release_shipped(tmp_path, monkeypatch):
     added = set()
     for md in sorted((ROOT / "docs").glob("*.md")):
         at_tag = subprocess.run(["git", "show", f"{tag}:docs/{md.name}"], cwd=ROOT,
-                                capture_output=True, text=True)
+                                capture_output=True, text=True, encoding="utf-8")
         shipped_md = at_tag.stdout if at_tag.returncode == 0 else ""
-        new_here = headings(md.read_text()) - headings(shipped_md)
+        new_here = headings(md.read_text(encoding="utf-8")) - headings(shipped_md)
         if new_here:
             added.add((md.stem, sorted(new_here)[0]))
     if not added:
@@ -146,13 +146,13 @@ def test_from_tag_publishes_what_that_release_shipped(tmp_path, monkeypatch):
     build_docs.build(tag, quiet=True, from_tag=True)
     for slug, heading in added:
         page = tmp_path / "docs" / tag / f"{slug}.html"
-        assert heading not in page.read_text(), (
+        assert heading not in page.read_text(encoding="utf-8"), (
             f"{heading!r} was added after {tag} but appears in its directory")
 
 
 def test_the_release_phase_uses_the_working_tree_not_the_tag():
     """At `docs` time the tag does not exist yet — `tag` runs three phases later —
     and the tree is exactly what is about to become it."""
-    src = (ROOT / "tools" / "release.py").read_text()
+    src = (ROOT / "tools" / "release.py").read_text(encoding="utf-8")
     body = src[src.index("def docs("):src.index("def commit(")]
     assert "from_tag" not in body

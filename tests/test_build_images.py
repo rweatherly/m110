@@ -5,6 +5,7 @@ HERO_DIR, the manifest in DERIVED_DIR. Sources come from per-target subfolders
 (Images/<target>/{finished,stacks,seestar-stacks}).
 """
 import json
+import os
 
 import pytest
 
@@ -95,7 +96,12 @@ def test_partial_render_does_not_prune(tmp_path, monkeypatch):
     other slugs' live derivatives."""
     root, internal = _setup(tmp_path, monkeypatch)
     _png(config.finished_dir("M99") / "M99_final.png")
-    _png(config.finished_dir("M81") / "M81_final.png")
+    # Different sizes give independent cache entries even at the same mtime.
+    _png(config.finished_dir("M81") / "M81_final.png", size=(80, 60))
+    # Reproduce the coarse file clock on Windows CI without depending on timing.
+    for target in ("M99", "M81"):
+        os.utime(config.finished_dir(target) / f"{target}_final.png",
+                 (1_700_000_000, 1_700_000_000))
     catalog = {"m99": {"id": "M99"}, "m81": {"id": "M81"}}
     totals = {"by_folder": {"M99": {"slugs": ["m99"]}, "M81": {"slugs": ["m81"]}},
               "by_slug": {}}

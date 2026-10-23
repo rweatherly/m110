@@ -10,6 +10,37 @@ Legend: `[ ]` open · `[~]` partially done
 
 ## Build, CI & dependencies
 
+- [ ] **Origin mosaic tiles import as one junk target per tile (B12).** A Celestron
+  Origin mosaic writes one session folder per tile (`Heart_Nebula_-_IC_1805_Tile01_…`)
+  plus an assembled `…_Mosaic_…` folder. B2's resolver never strips `_TileNN`, so each
+  tile lands in `Images/Heart Nebula - IC 1805 Tile01/` (16 coordinate-less Library
+  objects for a 4x4), calibration is copied once per tile, and the assembled stack files
+  under the plain `Sh2-190` as if it were a single-frame capture. None of the Seestar
+  mosaic handling (framings, `m110-stack` geometry) is reached. Fix: route tiles and
+  assembly to `Images/<id>_mosaic/` (spec WP13). Reproduced on `1789ba3` with real
+  Heart 4x4 / Soul 4x3 samples, 2026-10-23.
+
+- [x] **Origin sources missing from Import (B5).** Mounted roots and remembered
+  copies are recognized from direct-child session JSON without relying on a drive
+  label. Discovery is shallow and asynchronous; invalid/unreadable metadata is
+  skipped, and discovery threads are cancelled/drained on page destruction.
+  Selecting a source retains the preview-then-confirm, copy-only import flow.
+  Only matching JSON names need a file-type check; a case-variant directory
+  cannot hide a valid session JSON file on case-sensitive mounts.
+
+- [x] **Windows regression suite portability.** Relative ingest/image-manifest
+  paths use forward slashes consistently; tests treat native absolute paths and
+  file URLs as paths. The backup hash cache preserves Windows file IDs wider
+  than SQLite's signed 64-bit range without losing identity bits. Mangled S3
+  addresses with Windows separators are rejected. Fixture stores now isolate
+  `INTERNAL_DIR`, preventing remembered import aliases leaking between tests.
+
+- [x] **Origin repeated session calibration (B3/B4).** Identical masters are
+  deduplicated by content within a target/tier; re-exported same-name distinct
+  masters are retained. Root Calibration masters use the existing device library,
+  with conservative device attribution and explicit ISO/binning matching.
+  Missing metadata never becomes a compatibility claim.
+
 - [x] **Origin import review fixes (PR #1).** Existing blank Library names are
   backfilled without replacing curated names; preview remaps retain session
   stamps; saved source-folder aliases win over automatic labels; `Sh2` labels

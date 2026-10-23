@@ -1012,6 +1012,20 @@ build-time only, runtime stays offline).
 
 ### 6d — Multi-device: device-under-target + Dwarf remainders
 
+**Origin increments:** B1 safe session import and B2 catalog target names are
+implemented. B3 content-based session calibration deduplication and B4 shared
+root-calibration import/compatible library lookup, plus B5 automatic Origin source
+discovery, are implemented for review; manual acceptance is pending. All use the
+existing store layout. **Origin mosaics (B12)** are scoped next, after B5 and
+before B6: a mosaic is one session folder per tile (`<label>_TileNN_<stamp>`, each
+with lights, calibration and a tile stack) plus an assembled `<label>_Mosaic_<stamp>`
+folder (stack + `info.json` with `mosaicGrid`). B12 routes all of them to one
+`Images/<id>_mosaic/` target, the same decorated-target shape the Seestar uses, so
+framings, catalog credit and `m110-stack` mosaic geometry apply unchanged. Today each
+tile imports as its own target. Observing-night normalization, FILTER grouping, stack
+display, and Origin Siril/planning presets remain follow-ups (B6–B11), each with a
+mosaic acceptance check. Spec: `m110-workspace/plans/origin-support-spec.md`.
+
 Record device/source per session; introduce the optional
 `Images/<target>/<device>/` path level only when one target is actually shot on
 a **2nd device** (flat = default device). A device registry keyed to planning

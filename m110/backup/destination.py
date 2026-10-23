@@ -38,7 +38,7 @@ _S3_URI = re.compile(r"^s3://(?P<rest>.*)$", re.IGNORECASE)
 # mangled form here means the next caller to do it gets an error instead of a
 # wrong answer; a real folder called `s3:` is not a thing worth protecting (the
 # character is illegal in Windows filenames anyway).
-_S3_MANGLED = re.compile(r"^s3:/(?!/)", re.IGNORECASE)
+_S3_MANGLED = re.compile(r"^s3:[/\\](?![/\\])", re.IGNORECASE)
 
 
 @dataclass(frozen=True)

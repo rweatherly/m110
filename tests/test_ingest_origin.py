@@ -8,11 +8,17 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-from m110 import catalog, config, ingest
+from m110 import calibration, catalog, config, ingest, siril
 from tests._helpers import add_library, seed_root
 
 
 TARGET = "Pacman Nebula - NGC 281"
+
+
+def test_origin_aliases_stay_inside_the_fixture_store(tmp_path, monkeypatch):
+    root = seed_root(tmp_path, monkeypatch)
+    ingest.add_alias("Pacman test", "NGC 281")
+    assert (root / config.INTERNAL_DIRNAME / "ingest_aliases.toml").is_file()
 
 
 def _origin_fits(path: Path, imagetyp: str, *, obj: str | None = None) -> None:
@@ -134,6 +140,216 @@ def test_origin_creator_header_recognizes_a_session_without_info_json(tmp_path, 
     assert "unassigned" not in _by_kind(ops)
 
 
+@pytest.mark.parametrize("separate_scans", [False, True])
+def test_origin_calibration_dedups_by_content_and_remains_in_prep(
+        tmp_path, monkeypatch, separate_scans):
+    """Repeated masters must not multiply across sessions or disappear from prep."""
+    seed_root(tmp_path, monkeypatch)
+    src = tmp_path / "Origin"
+    first = _origin_session(src, folder="Pacman_2026-09-26_21-01-08")
+    second = _origin_session(src, folder="Pacman_2026-09-29_01-31-17")
+    before = {p: p.read_bytes() for p in src.rglob("*") if p.is_file()}
+    if separate_scans:
+        ingest.apply_ops(ingest.scan_directory_plan(first))
+        ops = ingest.scan_directory_plan(second)
+        assert not any(op.kind in ("dark", "flat", "bias") for op in ops)
+    else:
+        ops = ingest.scan_directory_plan(src)
+        assert len([op for op in ops if op.kind in ("dark", "flat", "bias")]) == 3
+    ingest.apply_ops(ops)
+    assert len(list(config.lights_dir("NGC 281").iterdir())) == 4
+    for tier in ("darks", "flats", "biases"):
+        assert len(list((config.target_dir("NGC 281") / tier).iterdir())) == 1
+    plan = siril.plan_prep("NGC 281")
+    assert plan.total_lights == 4
+    assert set(plan.calib_kinds) == {"darks", "flats", "biases"}
+    assert len(plan.calib_links) == 3
+    for stamp in ("20260926-210108", "20260929-013117"):
+        stored = config.seestar_stacks_dir("NGC 281") / f"{stamp}_dark0007.json"
+        assert stored.read_bytes() == (first / "dark0007.json").read_bytes()
+    assert ingest.scan_directory_plan(src) == []
+    assert all(p.read_bytes() == data for p, data in before.items())
+
+
+def test_origin_changed_calibration_with_same_session_name_is_retained(tmp_path, monkeypatch):
+    """A filename match must not hide changed bytes, including a re-exported session."""
+    seed_root(tmp_path, monkeypatch)
+    session = _origin_session(tmp_path, folder="Pacman_2026-09-26_21-01-08")
+    ingest.apply_ops(ingest.scan_directory_plan(session))
+    with fits.open(session / "dark0007.fits", mode="update") as hdus:
+        hdus[0].data[0, 0] = 42
+    ops = ingest.scan_directory_plan(session)
+    assert [op.kind for op in ops] == ["dark"]
+    ingest.apply_ops(ops)
+    darks = list(config.darks_dir("NGC 281").iterdir())
+    assert len(darks) == 2
+    assert {int(fits.getdata(p)[0, 0]) for p in darks} == {0, 42}
+    assert ingest.scan_directory_plan(session) == []
+
+
+def test_origin_calibration_apply_rechecks_independently_scanned_plans(tmp_path, monkeypatch):
+    """Two previews made before confirmation must still store a master only once."""
+    seed_root(tmp_path, monkeypatch)
+    a = _origin_session(tmp_path, folder="Pacman_2026-09-26_21-01-08")
+    b = _origin_session(tmp_path, folder="Pacman_2026-09-29_01-31-17")
+    plans = ingest.scan_directory_plan(a) + ingest.scan_directory_plan(b)
+    result = ingest.apply_ops(plans)
+    assert result["skipped"] == 3
+    assert len(list(config.darks_dir("NGC 281").iterdir())) == 1
+    assert ingest.scan_directory_plan(tmp_path) == []
+
+
+def test_origin_root_calibration_uses_device_library_and_prep(tmp_path, monkeypatch):
+    """Root masters have no target: infer the single sibling telescope, then match ISO."""
+    seed_root(tmp_path, monkeypatch)
+    src = tmp_path / "Origin"
+    session = _origin_session(src, folder="Pacman_2026-09-26_21-01-08")
+    for name in ("dark0007.fits", "bias0007.fits", "flat.fits"):
+        (session / name).unlink()  # Exercise the library-only case.
+    for name, kind in (("dark0007.fits", "DARK"), ("bias0007.fits", "BIAS"),
+                       ("flat.fits", "FLAT")):
+        path = src / "Calibration" / name
+        _origin_fits(path, kind)
+        with fits.open(path, mode="update") as hdus:
+            del hdus[0].header["TELESCOP"]
+            hdus[0].header["ISO"] = 200
+            hdus[0].header["XBINNING"] = 1
+    for path in session.glob("Light*.fits"):
+        with fits.open(path, mode="update") as hdus:
+            hdus[0].header["ISO"] = 200
+            hdus[0].header["XBINNING"] = 1
+    ops = ingest.scan_directory_plan(src)
+    masters = [op for op in ops if op.kind.startswith("cal-")]
+    assert {op.kind for op in masters} == {"cal-dark", "cal-flat", "cal-bias"}
+    assert all(op.object == "RASA6F2" and not op.new_object for op in masters)
+    assert all(op.action == "copy" for op in masters)
+    ingest.apply_ops(ops)
+    assert calibration.match_for_target("NGC 281").as_dict() == {
+        "darks": config.calibration_dir("RASA6F2", "darks") / "dark0007.fits",
+        "flats": config.calibration_dir("RASA6F2", "flats") / "flat.fits",
+        "biases": config.calibration_dir("RASA6F2", "biases") / "bias0007.fits",
+    }
+    assert siril.plan_prep("NGC 281").calib_source == "library"
+    assert ingest.scan_directory_plan(src) == []
+
+
+def test_origin_root_calibration_without_a_device_is_held(tmp_path, monkeypatch):
+    """A model name must never be invented for an unidentified calibration export."""
+    seed_root(tmp_path, monkeypatch)
+    path = tmp_path / "Origin" / "Calibration" / "dark0007.fits"
+    _origin_fits(path, "DARK")
+    with fits.open(path, mode="update") as hdus:
+        del hdus[0].header["TELESCOP"]
+    ops = ingest.scan_directory_plan(path.parent.parent)
+    assert [op.kind for op in ops] == ["unassigned"]
+    assert not any(op.object == "DARK" for op in ops)
+
+
+def test_origin_root_calibration_ambiguous_device_is_held(tmp_path, monkeypatch):
+    seed_root(tmp_path, monkeypatch)
+    src = tmp_path / "Origin"
+    first = _origin_session(src, folder="Pacman_2026-09-26_21-01-08")
+    second = _origin_session(src, folder="Pacman_2026-09-29_01-31-17")
+    for light in second.glob("Light*.fits"):
+        with fits.open(light, mode="update") as hdus:
+            hdus[0].header["TELESCOP"] = "Another Origin"
+    shared = src / "Calibration" / "dark0007.fits"
+    shared.parent.mkdir()
+    shared.write_bytes((first / "dark0007.fits").read_bytes())
+    with fits.open(shared, mode="update") as hdus:
+        del hdus[0].header["TELESCOP"]
+    ops = ingest.scan_directory_plan(src)
+    assert [op.kind for op in ops if Path(op.src) == shared] == ["unassigned"]
+    assert not any(op.kind.startswith("cal-") for op in ops)
+
+
+def test_origin_shared_masters_are_not_assigned_across_two_cameras_of_one_model(
+        tmp_path, monkeypatch):
+    seed_root(tmp_path, monkeypatch)
+    src = tmp_path / "Origin"
+    _origin_session(src, folder="Pacman_2026-09-26_21-01-08")
+    second = _origin_session(src, folder="Pacman_2026-09-29_01-31-17")
+    for light in second.glob("Light*.fits"):
+        with fits.open(light, mode="update") as hdus:
+            hdus[0].header["CAMERA"] = "Origin178-another-unit"
+    path = src / "Calibration" / "dark0007.fits"
+    _origin_fits(path, "DARK")
+    with fits.open(path, mode="update") as hdus:
+        del hdus[0].header["TELESCOP"]
+    ops = ingest.scan_directory_plan(src)
+    assert [op.kind for op in ops if Path(op.src) == path] == ["unassigned"]
+
+
+def test_origin_shared_masters_are_not_assigned_across_cameras_in_one_session(
+        tmp_path, monkeypatch):
+    """Every sibling light matters when attributing a root master."""
+    seed_root(tmp_path, monkeypatch)
+    src = tmp_path / "Origin"
+    session = _origin_session(src, folder="Pacman_2026-09-26_21-01-08")
+    with fits.open(session / "Light0002.fits", mode="update") as hdus:
+        hdus[0].header["CAMERA"] = "Origin178-another-unit"
+    path = src / "Calibration" / "dark0007.fits"
+    _origin_fits(path, "DARK")
+    with fits.open(path, mode="update") as hdus:
+        del hdus[0].header["TELESCOP"]
+    ops = ingest.scan_directory_plan(src)
+    assert [op.kind for op in ops if Path(op.src) == path] == ["unassigned"]
+
+
+def test_origin_empty_root_calibration_changes_nothing(tmp_path, monkeypatch):
+    seed_root(tmp_path, monkeypatch)
+    src = tmp_path / "Origin"
+    _origin_session(src, folder="Pacman_2026-09-26_21-01-08")
+    before = ingest.scan_directory_plan(src)
+    (src / "Calibration").mkdir()
+    assert ingest.scan_directory_plan(src) == before
+
+
+def test_origin_shared_master_can_gain_its_sidecar_on_a_later_import(tmp_path, monkeypatch):
+    """Content dedup must not discard newly supplied ISO metadata for an existing master."""
+    seed_root(tmp_path, monkeypatch)
+    src = tmp_path / "Origin"
+    path = src / "Calibration" / "dark0007.fits"
+    _origin_fits(path, "DARK")
+    ingest.apply_ops(ingest.scan_directory_plan(src))
+    path.with_suffix(".json").write_text(json.dumps({"iso": 200}))
+    ops = ingest.scan_directory_plan(src)
+    assert [Path(op.dest).name for op in ops] == ["dark0007.json"]
+    ingest.apply_ops(ops)
+    stored = config.calibration_dir("RASA6F2", "darks") / "dark0007.fits"
+    assert calibration.frame_facts(stored)["iso"] == 200
+    assert ingest.scan_directory_plan(src) == []
+
+
+def test_origin_calibration_hashing_cancellation_leaves_no_files(tmp_path, monkeypatch):
+    seed_root(tmp_path, monkeypatch)
+    session = _origin_session(tmp_path, folder="Pacman_2026-09-26_21-01-08")
+    op = next(op for op in ingest.scan_directory_plan(session) if op.kind == "dark")
+    calls = 0
+
+    def cancel_during_hash():
+        nonlocal calls
+        calls += 1
+        return calls >= 2
+
+    result = ingest.apply_ops([op], should_cancel=cancel_during_hash)
+    assert result == {"moved": 0, "skipped": 0, "cancelled": True}
+    assert not Path(op.dest).exists()
+    with pytest.raises(ingest.IngestCancelled):
+        ingest._digest(op.src, should_cancel=lambda: True)
+
+
+def test_origin_calibration_dedup_is_target_scoped(tmp_path, monkeypatch):
+    seed_root(tmp_path, monkeypatch)
+    src = tmp_path / "Origin"
+    _origin_session(src, folder="Pacman_2026-09-26_21-01-08")
+    _origin_session(src, folder="Andromeda_2026-09-29_01-31-17",
+                    info_target="Andromeda Galaxy")
+    ingest.apply_ops(ingest.scan_directory_plan(src))
+    assert len(list(config.darks_dir("NGC 281").iterdir())) == 1
+    assert len(list(config.darks_dir("M31").iterdir())) == 1
+
+
 @pytest.mark.parametrize(
     ("folder", "include_info", "info_target", "fits_target", "expected"),
     [
@@ -237,14 +453,14 @@ def test_remapped_origin_sessions_keep_stamps_and_reimport_once(tmp_path, monkey
                 for op in ingest.retarget(group, "M31").ops]
 
     plan = remapped_plan()
-    assert len({op.dest for op in plan}) == 16
+    assert len({op.dest for op in plan}) == 13  # three identical calibration files shared
     assert {Path(op.dest).name for op in plan if op.kind == "light"} == {
         "Light0001_20260926-210108.fits", "Light0002_20260926-210108.fits",
         "Light0001_20260929-013117.fits", "Light0002_20260929-013117.fits",
     }
-    assert ingest.apply_ops(plan)["moved"] == 16
+    assert ingest.apply_ops(plan)["moved"] == 13
     assert ingest.apply_ops(remapped_plan())["moved"] == 0
-    assert len(list(config.target_dir("M31").rglob("*.*"))) == 16
+    assert len(list(config.target_dir("M31").rglob("*.*"))) == 13
 
 
 def test_origin_remembered_folder_alias_wins_on_rescan(tmp_path, monkeypatch):

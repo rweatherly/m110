@@ -4,6 +4,8 @@
 so the interesting cases are the ambiguous ones — above all a Windows drive
 letter, which a naive `urlparse().scheme` reads as a URI scheme.
 """
+from pathlib import Path
+
 import pytest
 
 from m110.backup import backend_for, parse_destination
@@ -27,7 +29,8 @@ def test_a_path_is_local(raw):
     dest = parse_destination(raw)
     assert dest.kind == KIND_LOCAL
     assert dest.is_local is True
-    assert str(dest.path) == raw
+    assert dest.path == Path(raw)
+    assert dest.raw == raw
 
 
 @pytest.mark.parametrize("raw,bucket,prefix", [

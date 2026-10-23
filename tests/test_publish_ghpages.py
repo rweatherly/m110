@@ -3,6 +3,8 @@ bare repo (file:// URL; no network, no GitHub)."""
 import shutil
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 import pytest
 
@@ -61,7 +63,7 @@ def _site(tmp_path: Path, marker: str = "v1") -> Path:
 
 def _branch_file(remote: str, branch: str, path: str) -> bytes | None:
     res = subprocess.run(
-        ["git", "--git-dir", remote.removeprefix("file://"),
+        ["git", "--git-dir", url2pathname(urlsplit(remote).path),
          "show", f"{branch}:{path}"],
         capture_output=True)
     return res.stdout if res.returncode == 0 else None
@@ -69,7 +71,7 @@ def _branch_file(remote: str, branch: str, path: str) -> bytes | None:
 
 def _commit_count(remote: str, branch: str) -> int:
     res = subprocess.run(
-        ["git", "--git-dir", remote.removeprefix("file://"),
+        ["git", "--git-dir", url2pathname(urlsplit(remote).path),
          "rev-list", "--count", branch],
         capture_output=True, text=True, check=True)
     return int(res.stdout.strip())
@@ -216,7 +218,7 @@ def test_incremental_tip_fetch_is_blobless_when_server_allows_filters(tmp_path):
     plain-shallow fallback (servers without filter support) is what the other
     incremental tests exercise, since a bare repo disallows filters by default."""
     remote = _bare_repo(tmp_path)
-    subprocess.run(["git", "--git-dir", remote.removeprefix("file://"),
+    subprocess.run(["git", "--git-dir", url2pathname(urlsplit(remote).path),
                     "config", "uploadpack.allowFilter", "true"], check=True)
     site = _site_n(tmp_path, 12)
     ghpages.deploy(site, remote, mode="incremental")
@@ -313,7 +315,7 @@ def test_cancel_mid_push_kills_the_push(tmp_path):
     import time as _time
     remote = _bare_repo(tmp_path)
     # A pre-receive hook that stalls the push long enough to cancel mid-flight.
-    hook = Path(remote.removeprefix("file://")) / "hooks" / "pre-receive"
+    hook = Path(url2pathname(urlsplit(remote).path)) / "hooks" / "pre-receive"
     hook.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
     hook.chmod(0o755)
 
@@ -324,7 +326,7 @@ def test_cancel_mid_push_kills_the_push(tmp_path):
     assert _time.monotonic() - t0 < 10          # did not wait out the hook
     # The push never landed.
     res = subprocess.run(
-        ["git", "--git-dir", remote.removeprefix("file://"),
+        ["git", "--git-dir", url2pathname(urlsplit(remote).path),
          "rev-parse", "--verify", "gh-pages"], capture_output=True)
     assert res.returncode != 0
 

@@ -4,17 +4,23 @@ The recursive scan + collision engine is covered in test_ingest.py; here we driv
 the page: that pointing it at an arbitrary nested tree populates the grouped,
 selectable table with canonicalized copy destinations, and that Browse remembers
 recent places. qtbot/qapp come from pytest-qt."""
+import hashlib
+import json
+import threading
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("PySide6")
 from PySide6.QtCore import Qt  # noqa: E402
 
-from m110 import config  # noqa: E402
+from m110 import config, ingest, sources  # noqa: E402
 from tests._helpers import seed_root  # noqa: E402
 
 
 def _no_device(monkeypatch):
     monkeypatch.setattr(config, "find_seestar_myworks", lambda: None)
+    monkeypatch.setattr(sources, "mounted_roots", lambda: [])
 
 
 def _build_external(tmp_path):
@@ -110,7 +116,7 @@ def test_holding_reveal_opens_folder(tmp_path, monkeypatch, qtbot):
     monkeypatch.setattr(QDesktopServices, "openUrl",
                         lambda url: opened.append(url.toLocalFile()))
     _action_buttons(page, 0)["Reveal"].click()
-    assert opened == [str(config.STAGING_DIR / "M94")]
+    assert [Path(path) for path in opened] == [config.STAGING_DIR / "M94"]
 
 
 def test_holding_selections_survive_benign_refresh(tmp_path, monkeypatch, qtbot):
@@ -155,6 +161,152 @@ def test_import_page_browse_remembers_recents(tmp_path, monkeypatch, qtbot):
     page.reload()
     datas = [page._source.itemData(i) for i in range(page._source.count())]
     assert "/some/place/A" in datas
+
+
+@pytest.mark.parametrize("calibration", ["absent", "empty", "populated"])
+def test_detected_origin_source_previews_then_copies_only_after_confirmation(
+        tmp_path, monkeypatch, qtbot, calibration):
+    from PySide6.QtWidgets import QMessageBox
+    from m110.ui.pages.import_page import ImportPage
+    seed_root(tmp_path, monkeypatch)
+    _no_device(monkeypatch)
+    root = tmp_path / "UNTITLED"
+    session = root / "Pacman_2026-09-26_21-01-08"
+    _held_fits(session, "Light0001.fits", CREATOR="Origin 1.5.6240", IMAGETYP="LIGHT",
+               TELESCOP="RASA6F2", OBJECT="NGC 281")
+    (session / "info.json").write_text(json.dumps({"StackedInfo": {"objectName": "NGC 281"}}),
+                                       encoding="utf-8")
+    if calibration != "absent":
+        (root / "Calibration").mkdir()
+    if calibration == "populated":
+        _held_fits(root / "Calibration", "dark0007.fits", CREATOR="Origin 1.5.6240",
+                   IMAGETYP="DARK", TELESCOP="RASA6F2")
+    before = {p.relative_to(root): hashlib.sha256(p.read_bytes()).hexdigest()
+              for p in root.rglob("*") if p.is_file()}
+    monkeypatch.setattr(sources, "mounted_roots", lambda: [root])
+    page = ImportPage()
+    qtbot.addWidget(page)
+    qtbot.waitUntil(lambda: page._source.findData(str(root)) >= 0, timeout=5000)
+    index = page._source.findData(str(root))
+    assert "Origin" in page._source.itemText(index)
+    assert page.table.rowCount() == 0  # Discovery must not start an import scan.
+    page._source.setCurrentIndex(index)
+    page._on_source_chosen(index)
+    qtbot.waitUntil(lambda: page._worker is None, timeout=5000)
+    assert page._groups
+    assert all(op.action == "copy" for group in page._groups for op in group.ops)
+    assert not config.lights_dir("NGC 281").exists()
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Cancel)
+    page._do_import()
+    assert not config.lights_dir("NGC 281").exists()
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    page._do_import()
+    qtbot.waitUntil(lambda: page._worker is None, timeout=5000)
+    assert (config.lights_dir("NGC 281") / "Light0001_20260926-210108.fits").is_file()
+    if calibration == "populated":
+        assert (config.calibration_dir("RASA6F2", "darks") / "dark0007.fits").is_file()
+    assert {p.relative_to(root): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in root.rglob("*") if p.is_file()} == before
+    assert ingest.scan_directory_plan(root) == []
+
+
+def test_origin_discovery_preserves_seestar_recents_and_current_selection(
+        tmp_path, monkeypatch, qtbot):
+    from m110.ui.pages.import_page import ImportPage, RECENTS_KEY
+    seed_root(tmp_path, monkeypatch)
+    root = tmp_path / "copied-root"
+    session = root / "session"
+    session.mkdir(parents=True)
+    (session / "info.json").write_text('{"StackedInfo": {}}', encoding="utf-8")
+    seestar = tmp_path / "Seestar" / "MyWorks"
+    seestar.mkdir(parents=True)
+    monkeypatch.setattr(config, "find_seestar_myworks", lambda: seestar)
+    monkeypatch.setattr(sources, "mounted_roots", lambda: [])
+    config.save_setting(RECENTS_KEY, [str(root), str(tmp_path / "recent")])
+    page = ImportPage()
+    qtbot.addWidget(page)
+    page._root = str(seestar)
+    page.reload()
+    qtbot.waitUntil(lambda: page._source_worker is None, timeout=5000)
+    places = [page._source.itemData(i) for i in range(page._source.count())]
+    assert places.count(str(root)) == 1
+    assert "Origin" in page._source.itemText(page._source.findData(str(root)))
+    assert "Seestar" in page._source.itemText(page._source.findData(str(seestar)))
+    assert str(tmp_path / "recent") in places
+    assert page._source.currentData() == str(seestar)
+
+
+def test_origin_discovery_keeps_the_ui_responsive(tmp_path, monkeypatch, qtbot):
+    from PySide6.QtCore import QTimer
+    from m110.ui.pages.import_page import ImportPage
+    seed_root(tmp_path, monkeypatch)
+    _no_device(monkeypatch)
+    entered, release, completed = threading.Event(), threading.Event(), threading.Event()
+
+    def mounted_roots():
+        entered.set()
+        release.wait(5)
+        completed.set()
+        return []
+
+    monkeypatch.setattr(sources, "mounted_roots", mounted_roots)
+    page = ImportPage()
+    qtbot.addWidget(page)
+    ticks = []
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=1000)
+        QTimer.singleShot(0, lambda: ticks.append(True))
+        qtbot.waitUntil(lambda: bool(ticks), timeout=1000)
+        assert not completed.is_set()  # The UI event ran before the probe completed.
+        assert page._browse_btn.isEnabled()
+    finally:
+        release.set()
+        page._stop_worker()
+
+
+def test_origin_sources_refresh_when_mounts_change(tmp_path, monkeypatch, qtbot):
+    from m110.ui.pages.import_page import ImportPage
+    seed_root(tmp_path, monkeypatch)
+    _no_device(monkeypatch)
+    session = tmp_path / "USB" / "session"
+    session.mkdir(parents=True)
+    (session / "info.json").write_text('{"StackedInfo": {}}', encoding="utf-8")
+    roots = []
+    monkeypatch.setattr(sources, "mounted_roots", lambda: list(roots))
+    page = ImportPage()
+    qtbot.addWidget(page)
+    qtbot.waitUntil(lambda: page._source_worker is None, timeout=5000)
+    assert page._source.findData(str(session.parent)) == -1
+    roots.append(session.parent)
+    page.reload()
+    qtbot.waitUntil(lambda: page._source_worker is None, timeout=5000)
+    assert page._source.findData(str(session.parent)) > 0
+    roots.clear()
+    page.reload()
+    qtbot.waitUntil(lambda: page._source_worker is None, timeout=5000)
+    assert page._source.findData(str(session.parent)) == -1
+
+
+def test_origin_discovery_drains_before_page_destruction(tmp_path, monkeypatch, qtbot):
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from m110.ui.pages.import_page import ImportPage
+    seed_root(tmp_path, monkeypatch)
+    _no_device(monkeypatch)
+    entered, stopped = threading.Event(), threading.Event()
+
+    def discover(roots, should_cancel):
+        entered.set()
+        while not should_cancel():
+            stopped.wait(0.01)
+        stopped.set()
+        raise ingest.IngestCancelled()
+
+    monkeypatch.setattr(sources, "find_origin_roots", discover)
+    page = ImportPage()
+    qtbot.waitUntil(entered.is_set, timeout=1000)
+    page.deleteLater()
+    QCoreApplication.sendPostedEvents(page, QEvent.DeferredDelete)
+    assert stopped.is_set()
 
 
 def _held_fits(folder, name, **headers):

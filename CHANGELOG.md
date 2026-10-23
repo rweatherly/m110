@@ -11,6 +11,16 @@ changes a **user** would notice, per release.
 ## [Unreleased]
 
 ### Added
+- **Origin import sources appear automatically.** Import recognizes mounted
+  Origin roots and remembered copies by their session JSON, regardless of drive
+  label. Discovery runs in the background on Windows, macOS, and Linux; selecting
+  a source still previews first and copies only after confirmation.
+- **Origin calibration without repeated copies.** Sessions reusing identical
+  calibration frames share one stored copy per target; different calibration
+  bytes are kept even when filenames repeat. Shared Origin `Calibration/`
+  exports import into the telescope's master library. Library-only preparation
+  selects masters only with enough device and setting evidence, using paired
+  ISO metadata where available.
 - **Celestron Origin session import.** Import now recognizes current Origin session
   folders, copies them without changing the source, and stamps reused camera
   filenames with the session start time. Lights and session calibration frames go
@@ -63,6 +73,12 @@ changes a **user** would notice, per release.
   given one telescope's masters.
 
 ### Fixed
+- Origin source discovery avoids file-type checks for unrelated capture files
+  and ignores directories named like session JSON when choosing the metadata file.
+- Windows imports display consistent destination paths, and pooled backups handle
+  the wide file IDs reported by Windows without an integer-overflow failure.
+  A cloud backup address accidentally converted into Windows path syntax is
+  rejected instead of being treated as a local folder.
 - Origin preview remaps preserve session filenames and remembered target choices,
   so importing again does not add extra copies. Labels such as
   `Cave Nebula - Sh2-155` resolve to their catalog entry, and refresh fills missing

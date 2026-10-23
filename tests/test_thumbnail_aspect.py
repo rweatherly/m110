@@ -121,7 +121,7 @@ def test_no_view_builds_an_icon_straight_from_a_file_path():
 
     offenders = []
     for f in sorted(Path("m110/ui").rglob("*.py")):
-        tree = ast.parse(f.read_text(), filename=str(f))
+        tree = ast.parse(f.read_text(encoding="utf-8"), filename=str(f))
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Name)

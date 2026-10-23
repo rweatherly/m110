@@ -10,10 +10,14 @@ from m110 import config
 def seed_root(tmp_path, monkeypatch):
     """Point every per-store `config` path at a fresh temp root, bootstrap it, and
     return the root. Patches all the globals the engine reads dynamically (incl.
-    PROFILES_DIR for the planning engine) so tests never touch live data."""
+    PROFILES_DIR for the planning engine) so tests never touch live data. Source
+    discovery sees no host drives unless a test supplies its own mount fixture."""
+    from m110 import sources
+    monkeypatch.setattr(sources, "mounted_roots", lambda: [])
     root = tmp_path / "M110"
     internal = root / config.INTERNAL_DIRNAME
     monkeypatch.setattr(config, "DATA_ROOT", root)
+    monkeypatch.setattr(config, "INTERNAL_DIR", internal)
     monkeypatch.setattr(config, "LIBRARY_TOML", internal / "library.toml")
     monkeypatch.setattr(config, "IMAGES_DIR", root / "Images")
     monkeypatch.setattr(config, "OBJECTS_DIR", root / "Objects")
@@ -45,7 +49,7 @@ def add_library(root, entries):
     """Append minimal `[catalog.<slug>]` blocks to the (empty) Library so a test
     can populate the collection directly (5d: the Library no longer bulk-seeds)."""
     lib = root / config.INTERNAL_DIRNAME / "library.toml"
-    with lib.open("a") as f:
+    with lib.open("a", encoding="utf-8") as f:
         for slug, e in entries.items():
             f.write(f"\n[catalog.{slug}]\n")
             for k, v in e.items():
