@@ -2007,6 +2007,23 @@ def apply_ops(ops: list[IngestOp], progress=None, should_cancel=None) -> dict:
     root = config.DATA_ROOT.resolve()
     ctx: dict = {}
     master_destinations: dict[str, Path] = {}
+    sidecars_by_master: dict[str, list[IngestOp]] = {}
+    for candidate in ops:
+        if candidate.master_src and candidate.action == "move":
+            sidecars_by_master.setdefault(candidate.master_src, []).append(candidate)
+    ordered_ops: list[IngestOp] = []
+    for candidate in ops:
+        if candidate.master_src and candidate.action == "move":
+            continue
+        ordered_ops.append(candidate)
+        ordered_ops.extend(sidecars_by_master.pop(candidate.src, ()))
+    for sidecars in sidecars_by_master.values():
+        ordered_ops.extend(sidecars)
+    paired_move_sources = {
+        candidate.master_src for candidate in ordered_ops
+        if candidate.master_src and candidate.action == "move"
+    }
+    pending_move_pairs: set[str] = set()
     for op in ops:
         try:
             Path(op.dest).resolve().relative_to(root)
@@ -2014,10 +2031,14 @@ def apply_ops(ops: list[IngestOp], progress=None, should_cancel=None) -> dict:
             raise ValueError(
                 f"refusing ingest op writing outside the data store: {op.dest!r}")
 
-    for i, op in enumerate(ops, 1):
+    for i, op in enumerate(ordered_ops, 1):
+        paired_move = op.master_src in pending_move_pairs
+        cancel_after_pair = False
         if should_cancel and should_cancel():
-            cancelled = True
-            break
+            if not paired_move:
+                cancelled = True
+                break
+            cancel_after_pair = True
         digest = None
         destination = op.dest
         if op.master_src:
@@ -2034,14 +2055,22 @@ def apply_ops(ops: list[IngestOp], progress=None, should_cancel=None) -> dict:
             if (master is None or master.with_suffix(".json").exists()
                     or _casefold_file(master.with_suffix(".json")) is not None):
                 skipped += 1          # never orphan metadata or replace retained settings
+                pending_move_pairs.discard(op.master_src)
                 if progress:
                     progress(i, total)
+                if cancel_after_pair:
+                    cancelled = True
+                    break
                 continue
             if any(Path(name).stem.casefold() == master.stem.casefold()
                    and name != master.name for name in _fit_files(master.parent)):
                 skipped += 1          # existing masters share an ambiguous JSON slot
+                pending_move_pairs.discard(op.master_src)
                 if progress:
                     progress(i, total)
+                if cancel_after_pair:
+                    cancelled = True
+                    break
                 continue
             destination = str(master.with_suffix(".json"))
         if (op.layout in ("origin", "origin-calibration", "calibration")
@@ -2094,6 +2123,13 @@ def apply_ops(ops: list[IngestOp], progress=None, should_cancel=None) -> dict:
                 master_destinations[op.src] = Path(dest)
         if progress:
             progress(i, total)
+        if op.master_src:
+            pending_move_pairs.discard(op.master_src)
+        elif op.src in paired_move_sources and op.action == "move":
+            pending_move_pairs.add(op.src)
+        if cancel_after_pair:
+            cancelled = True
+            break
     return {"moved": moved, "skipped": skipped, "cancelled": cancelled}
 
 

@@ -406,6 +406,31 @@ def test_store_calibration_move_keeps_json_paired_after_collision(tmp_path, monk
     assert calibration.frame_facts(stored.with_name("master_1.fits"))["iso"] == 200
 
 
+def test_store_calibration_move_finishes_metadata_pair_when_cancelled(
+        tmp_path, monkeypatch):
+    seed_root(tmp_path, monkeypatch)
+    src = tmp_path / "foreign" / "Calibration" / "RASA6F2" / "darks" / "master.fits"
+    _origin_fits(src, "DARK")
+    src.with_suffix(".json").write_text('{"iso": 200}')
+    ops = ingest.scan_directory_plan(tmp_path / "foreign", action="move")
+    cancellation_requested = False
+
+    def progress(index, _total):
+        nonlocal cancellation_requested
+        if index == 1:
+            cancellation_requested = True
+
+    result = ingest.apply_ops(
+        ops, progress=progress, should_cancel=lambda: cancellation_requested)
+
+    stored = config.calibration_dir("RASA6F2", "darks") / "master.fits"
+    assert result == {"moved": 2, "skipped": 0, "cancelled": True}
+    assert not src.exists()
+    assert not src.with_suffix(".json").exists()
+    assert calibration.frame_facts(stored)["iso"] == 200
+    assert ingest.scan_directory_plan(tmp_path / "foreign") == []
+
+
 @pytest.mark.parametrize("stale_preview", [False, True])
 @pytest.mark.parametrize("occupied", ["json", "fit", "directory"])
 def test_calibration_new_master_does_not_claim_an_occupied_metadata_stem(
