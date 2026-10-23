@@ -1015,8 +1015,10 @@ build-time only, runtime stays offline).
 **Origin increments:** B1 safe session import and B2 catalog target names are
 implemented. B3 content-based session calibration deduplication and B4 shared
 root-calibration import/compatible library lookup, plus B5 automatic Origin source
-discovery, are implemented for review; manual acceptance is pending. All use the
-existing store layout. **Origin mosaics (B12)** are scoped next, after B5 and
+discovery, were merged into fork main via PR #2. All use the existing store
+layout. PR #2 follow-up hardens paired calibration JSON across
+stale previews/store imports, case-insensitive metadata lookup and discovery
+past individual inaccessible children. **Origin mosaics (B12)** are scoped next, after B5 and
 before B6: a mosaic is one session folder per tile (`<label>_TileNN_<stamp>`, each
 with lights, calibration and a tile stack) plus an assembled `<label>_Mosaic_<stamp>`
 folder (stack + `info.json` with `mosaicGrid`). B12 routes all of them to one

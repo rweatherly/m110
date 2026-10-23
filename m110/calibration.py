@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import config, devices
-from .ingest import ORIGIN_JSON_MAX_BYTES, _normalize_imagetyp, _safe_segment
+from .ingest import ORIGIN_JSON_MAX_BYTES, _casefold_file, _normalize_imagetyp, _safe_segment
 
 TIERS = config.CALIBRATION_TIERS                     # ("darks", "flats", "biases")
 _TIER_OF_KIND = {"dark": "darks", "flat": "flats", "bias": "biases"}
@@ -129,6 +129,9 @@ def frame_facts(path) -> dict | None:
         else:
             sidecar = p.with_suffix(".json")
         try:
+            sidecar = _casefold_file(sidecar)
+            if sidecar is None:
+                raise FileNotFoundError("Origin JSON not found")
             if sidecar.stat().st_size > _MAX_SIDECAR_BYTES:
                 raise ValueError("Origin JSON over 1 MiB; ignored")
             data = json.loads(sidecar.read_text(encoding="utf-8"))

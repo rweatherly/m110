@@ -136,6 +136,35 @@ def test_origin_session_json_and_master_sidecar_supply_iso(tmp_path, monkeypatch
     assert calibration.frame_facts(light)["iso"] is None
 
 
+def test_origin_session_metadata_lookup_is_case_insensitive(tmp_path, monkeypatch):
+    """Import preserves INFO.JSON spelling; Linux must still recover settings."""
+    seed_root(tmp_path, monkeypatch)
+    light = _master(config.lights_dir("M31") / "Light0001_20260926-210108.fits", "LIGHT",
+                    CREATOR="Origin 1.5.6240", EXPTIME=15.0, TELESCOP="RASA6F2")
+    directory = config.seestar_stacks_dir("M31")
+    directory.mkdir(parents=True)
+    (directory / "20260926-210108_INFO.JSON").write_text(
+        '{"StackedInfo": {"captureParams": {"iso": 200, "binning": 1}}}')
+    original = Path.stat
+    original_is_file = Path.is_file
+
+    def stat(path, *args, **kwargs):
+        # Emulate a case-sensitive filesystem on Windows too.
+        if path.parent == directory and path.name == "20260926-210108_info.json":
+            raise FileNotFoundError(str(path))
+        return original(path, *args, **kwargs)
+
+    def is_file(path):
+        if path.parent == directory and path.name == "20260926-210108_info.json":
+            return False
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    monkeypatch.setattr(Path, "is_file", is_file)
+    assert calibration.frame_facts(light)["iso"] == 200
+    assert calibration.frame_facts(light)["binning"] == 1
+
+
 def test_origin_library_refuses_lights_without_origin_setting_evidence(tmp_path, monkeypatch):
     """Callers without Origin facts must not fall through to None == None matching."""
     seed_root(tmp_path, monkeypatch)

@@ -73,6 +73,11 @@ changes a **user** would notice, per release.
   given one telescope's masters.
 
 ### Fixed
+- Calibration imports keep paired JSON with the master actually retained after
+  deduplication or filename collisions, including imports from another M110 store.
+  Existing master settings are preserved. Origin metadata lookup also accepts
+  uppercase JSON names on case-sensitive filesystems, and one inaccessible child
+  no longer hides accessible Origin sources on the same drive.
 - Origin source discovery avoids file-type checks for unrelated capture files
   and ignores directories named like session JSON when choosing the metadata file.
 - Windows imports display consistent destination paths, and pooled backups handle

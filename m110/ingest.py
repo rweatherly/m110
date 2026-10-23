@@ -55,6 +55,7 @@ class IngestOp:
     size_bytes: int = 0       # source file size (stat'd on the scan worker)
     layout: str = "seestar"   # recognizer that claimed it (LAYOUTS id)
     object: str = ""          # canonical object/category label this op lands under
+    master_src: str = ""      # paired calibration JSON follows this source master's bytes
 
 
 @dataclass
@@ -778,16 +779,20 @@ def _calibration_content(dst_dir: Path, ctx: dict, should_cancel=None) -> tuple[
     """Per-scan hashes and reserved names for one calibration tier; no pixel reads."""
     cache = ctx.setdefault("calibration_content", {})
     if dst_dir not in cache:
-        files = _all_files(dst_dir)
+        try:
+            with os.scandir(dst_dir) as entries:
+                names = {e.name for e in entries if not config.is_hidden_name(e.name)}
+        except FileNotFoundError:
+            names = set()
         hashes: dict = {}
-        for f in files:
+        for f in sorted(names):
             if not config.is_fits_file(f):
                 continue
             try:
                 hashes[_digest(str(dst_dir / f), should_cancel)] = dst_dir / f
             except OSError:
                 continue             # unreadable master: can't dedup against it, don't abort
-        cache[dst_dir] = (hashes, set(files))
+        cache[dst_dir] = (hashes, names)
     return cache[dst_dir]
 
 
@@ -800,10 +805,36 @@ def _scan_digest(src, ctx: dict, should_cancel=None) -> str:
     return cache[key]
 
 
-def _emit_origin_calibration(src_dir: Path, files, kind: str, obj: str,
-                             group: str, stamp: str | None, ctx: dict,
-                             should_cancel=None, layout="origin") -> list[IngestOp]:
-    """Keep one copy per target/tier and content, even across pending sessions."""
+def _casefold_file(path: Path) -> Path | None:
+    """Find a file by case-insensitive name, ignoring same-named directories."""
+    try:
+        if path.is_file():
+            return path
+        with os.scandir(path.parent) as entries:
+            names = sorted(e.name for e in entries
+                           if e.name.lower() == path.name.lower() and e.is_file())
+        return path.parent / names[0] if names else None
+    except OSError:
+        return None
+
+
+def _free_calibration_dest(dest: Path, names: set[str]) -> Path:
+    """A master owns its stem across FITS extensions and its paired JSON slot."""
+    reserved = {Path(name).stem.casefold() for name in names
+                if config.is_fits_file(name) or Path(name).suffix.lower() == ".json"}
+    candidate = dest
+    n = 1
+    while (candidate.stem.casefold() in reserved or candidate.exists()
+           or candidate.with_suffix(".json").exists()):
+        candidate = dest.with_name(f"{dest.stem}_{n}{dest.suffix}")
+        n += 1
+    return candidate
+
+
+def _emit_calibration(src_dir: Path, files, kind: str, obj: str,
+                      group: str, stamp: str | None, ctx: dict,
+                      should_cancel=None, layout="origin", action="copy") -> list[IngestOp]:
+    """Keep one copy per target/device tier and content across pending imports."""
     dst_dir = _KIND_DIR[kind](obj)
     hashes, names = _calibration_content(dst_dir, ctx, should_cancel)
     ops: list[IngestOp] = []
@@ -813,19 +844,31 @@ def _emit_origin_calibration(src_dir: Path, files, kind: str, obj: str,
         if digest in hashes:
             continue
         name = _origin_stamped_name(filename, stamp) if stamp else filename
-        original = Path(name)
-        n = 1
-        while name in names:
-            name = f"{original.stem}_{n}{original.suffix}"
-            n += 1
-        dest = dst_dir / name
+        dest = _free_calibration_dest(dst_dir / name, names)
         ops.append(IngestOp(str(src), str(dest), kind, group,
                             dest.relative_to(config.DATA_ROOT).as_posix(),
                             kind not in _CAL_KINDS and not config.target_dir(obj).is_dir(),
-                            "copy", _size(src), layout, obj))
+                            action, _size(src), layout, obj))
         hashes[digest] = dest
-        names.add(name)
+        names.add(dest.name)
     return ops
+
+
+def _append_calibration_sidecar(src: Path, master: Path, kind: str, obj: str,
+                                group: str, action: str, layout: str,
+                                handled: set, ops: list[IngestOp]) -> None:
+    """Preview paired metadata; apply resolves the master's final destination."""
+    sidecar = _casefold_file(src.with_suffix(".json"))
+    if sidecar is None:
+        return
+    handled.add(sidecar.name)
+    dest = master.with_suffix(".json")
+    if (not dest.exists() and _casefold_file(dest) is None
+            and not any(op.dest == str(dest) for op in ops)):
+        ops.append(IngestOp(
+            str(sidecar), str(dest), kind, group,
+            dest.relative_to(config.DATA_ROOT).as_posix(), False, action,
+            _size(sidecar), layout, obj, master_src=str(src)))
 
 
 def _classify_origin_dir(src_dir: Path, name: str, action: str,
@@ -872,8 +915,8 @@ def _classify_origin_dir(src_dir: Path, name: str, action: str,
     for kind, files in buckets.items():
         handled.update(files)
         if kind in ("dark", "flat", "bias"):
-            ops += _emit_origin_calibration(src_dir, files, kind, obj, name, stamp,
-                                            ctx if ctx is not None else {}, should_cancel)
+            ops += _emit_calibration(src_dir, files, kind, obj, name, stamp,
+                                     ctx if ctx is not None else {}, should_cancel)
         else:
             ops += _emit_files(src_dir, files, kind, obj, name, action, "origin",
                                lambda filename: _origin_stamped_name(filename, stamp))
@@ -1221,23 +1264,17 @@ def _classify_origin_calibration(src_dir: Path, handled: set, ctx: dict,
         if not device:
             continue                 # unknown/ambiguous attribution → holding area
         handled.add(filename)
-        emitted = _emit_origin_calibration(
+        emitted = _emit_calibration(
             src_dir, [filename], f"cal-{kind}", _safe_segment(device),
             f"{device} calibration masters", None, ctx, should_cancel,
             layout="origin-calibration")
         ops += emitted
-        sidecar = (src_dir / filename).with_suffix(".json")
-        if sidecar.is_file():
-            handled.add(sidecar.name)
-            dst_dir = _KIND_DIR[f"cal-{kind}"](_safe_segment(device))
-            hashes, _names = _calibration_content(dst_dir, ctx, should_cancel)
-            master = hashes[_scan_digest(src_dir / filename, ctx, should_cancel)]
-            dest = master.with_suffix(".json")
-            if not dest.exists() and not any(op.dest == str(dest) for op in ops):
-                ops.append(IngestOp(
-                    str(sidecar), str(dest), f"cal-{kind}", f"{device} calibration masters",
-                    dest.relative_to(config.DATA_ROOT).as_posix(), False, "copy",
-                    _size(sidecar), "origin-calibration", _safe_segment(device)))
+        dst_dir = _KIND_DIR[f"cal-{kind}"](_safe_segment(device))
+        hashes, _names = _calibration_content(dst_dir, ctx, should_cancel)
+        master = hashes[_scan_digest(src_dir / filename, ctx, should_cancel)]
+        _append_calibration_sidecar(
+            src_dir / filename, master, f"cal-{kind}", _safe_segment(device),
+            f"{device} calibration masters", "copy", "origin-calibration", handled, ops)
     return ops
 
 
@@ -1250,7 +1287,7 @@ def _is_store_calibration_dir(src_dir: Path, name: str) -> bool:
 
 
 def _classify_calibration_dir(src_dir: Path, name: str, action: str,
-                              handled: set) -> list[IngestOp]:
+                              handled: set, ctx: dict, should_cancel=None) -> list[IngestOp]:
     """Route another store's ``Calibration/<device>/<tier>/`` into this store's
     ``Calibration/<device>/<tier>/`` (both are in the path). Ops carry the device
     as their `object` — never a capture target, so `new_object` stays False."""
@@ -1258,8 +1295,17 @@ def _classify_calibration_dir(src_dir: Path, name: str, action: str,
     dev = _safe_segment(src_dir.parent.name)
     files = _fit_files(src_dir)
     handled.update(files)
-    return _emit_one_kind(src_dir, files, _CAL_KIND_BY_TIER[tier], dev,
-                          f"{dev} calibration masters", action, "calibration")
+    kind = _CAL_KIND_BY_TIER[tier]
+    group = f"{dev} calibration masters"
+    ops = _emit_calibration(src_dir, files, kind, dev, group, None,
+                             ctx, should_cancel, layout="calibration", action=action)
+    hashes, _names = _calibration_content(_KIND_DIR[kind](dev), ctx, should_cancel)
+    for filename in files:
+        src = src_dir / filename
+        master = hashes[_scan_digest(src, ctx, should_cancel)]
+        _append_calibration_sidecar(src, master, kind, dev, group, action,
+                                    "calibration", handled, ops)
+    return ops
 
 
 # ── Seestar dark library (<volume>/darklibrary/<exp>s/) ───────────────────────
@@ -1407,7 +1453,8 @@ def _classify_dir(src_dir: Path, name: str, action: str,
     if layout == "m110-store":
         ops = _classify_store_dir(src_dir, name, action, handled)
     elif layout == "calibration":
-        ops = _classify_calibration_dir(src_dir, name, action, handled)
+        ops = _classify_calibration_dir(src_dir, name, action, handled,
+                                       ctx if ctx is not None else {}, should_cancel)
     elif layout == "origin-calibration":
         ops = _classify_origin_calibration(src_dir, handled,
                                            ctx if ctx is not None else {}, should_cancel)
@@ -1959,6 +2006,7 @@ def apply_ops(ops: list[IngestOp], progress=None, should_cancel=None) -> dict:
     # alias, retarget — regardless of how the op was built (SECURITY_ASSESSMENT.md F1).
     root = config.DATA_ROOT.resolve()
     ctx: dict = {}
+    master_destinations: dict[str, Path] = {}
     for op in ops:
         try:
             Path(op.dest).resolve().relative_to(root)
@@ -1971,7 +2019,26 @@ def apply_ops(ops: list[IngestOp], progress=None, should_cancel=None) -> dict:
             cancelled = True
             break
         digest = None
-        if (op.layout in ("origin", "origin-calibration")
+        destination = op.dest
+        if op.master_src:
+            master = master_destinations.get(op.master_src)
+            if master is None:
+                # A later import may supply JSON alone for an existing master.
+                try:
+                    hashes, _names = _calibration_content(Path(op.dest).parent, ctx,
+                                                           should_cancel)
+                    master = hashes.get(_digest(op.master_src, should_cancel))
+                except IngestCancelled:
+                    cancelled = True
+                    break
+            if (master is None or master.with_suffix(".json").exists()
+                    or _casefold_file(master.with_suffix(".json")) is not None):
+                skipped += 1          # never orphan metadata or replace retained settings
+                if progress:
+                    progress(i, total)
+                continue
+            destination = str(master.with_suffix(".json"))
+        if (op.layout in ("origin", "origin-calibration", "calibration")
                 and op.kind in ("dark", "flat", "bias", "cal-dark", "cal-flat", "cal-bias")
                 and config.is_fits_file(op.src)):
             try:
@@ -1982,15 +2049,19 @@ def apply_ops(ops: list[IngestOp], progress=None, should_cancel=None) -> dict:
                 cancelled = True
                 break
             if digest in hashes:
+                master_destinations[op.src] = hashes[digest]
                 skipped += 1
                 if progress:
                     progress(i, total)
                 continue
-        os.makedirs(os.path.dirname(op.dest), exist_ok=True)
-        if os.path.exists(op.dest) and _same_content(op.src, op.dest):
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        if os.path.exists(destination) and _same_content(op.src, destination):
             skipped += 1                    # identical bytes already present
+            if digest is not None:
+                master_destinations[op.src] = Path(destination)
         else:
-            dest = _free_dest(op.dest)      # free → op.dest; distinct clash → _N
+            dest = (str(_free_calibration_dest(Path(destination), _names))
+                    if digest is not None else _free_dest(destination))
             if op.action == "copy":
                 # Bytes only (no copystat): copying from an SMB-mounted Seestar,
                 # copying the source's flags/xattrs onto the destination raises
@@ -2013,6 +2084,8 @@ def apply_ops(ops: list[IngestOp], progress=None, should_cancel=None) -> dict:
             moved += 1
             if digest is not None:
                 hashes[digest] = Path(dest)
+                _names.add(Path(dest).name)
+                master_destinations[op.src] = Path(dest)
         if progress:
             progress(i, total)
     return {"moved": moved, "skipped": skipped, "cancelled": cancelled}
