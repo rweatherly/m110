@@ -2037,6 +2037,12 @@ def apply_ops(ops: list[IngestOp], progress=None, should_cancel=None) -> dict:
                 if progress:
                     progress(i, total)
                 continue
+            if any(Path(name).stem.casefold() == master.stem.casefold()
+                   and name != master.name for name in _fit_files(master.parent)):
+                skipped += 1          # existing masters share an ambiguous JSON slot
+                if progress:
+                    progress(i, total)
+                continue
             destination = str(master.with_suffix(".json"))
         if (op.layout in ("origin", "origin-calibration", "calibration")
                 and op.kind in ("dark", "flat", "bias", "cal-dark", "cal-flat", "cal-bias")
